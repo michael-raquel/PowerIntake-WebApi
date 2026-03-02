@@ -10,6 +10,9 @@ const app = express();
 setupSwagger(app);
 app.use(express.json());
 
+app.get("/", (req, res) => {
+  res.send("Hello World!");
+});
 
 const PORT = process.env.PORT;
 app.listen(PORT, () => {
