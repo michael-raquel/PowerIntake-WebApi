@@ -79,7 +79,7 @@
  *     summary: Update an existing system administrator
  *     tags: [System Admin]
  *     parameters:
- *       - in: query
+ *       - in: params
  *         name: systemadminuuid
  *         schema:
  *           type: string

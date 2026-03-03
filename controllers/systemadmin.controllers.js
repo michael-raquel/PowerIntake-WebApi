@@ -36,7 +36,7 @@ const create_SystemAdmin = async (req, res) => {
 
 const update_SystemAdmin = async (req, res) => {
     try {
-        const { systemadminuuid } = req.query;
+        const { systemadminuuid } = req.params;
         const { firstname, lastname, email, contactnumber,
             gender, birthdate, city, barangay, isactive, modifiedby } = req.body;
 
