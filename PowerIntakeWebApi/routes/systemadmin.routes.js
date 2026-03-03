@@ -1,7 +1,9 @@
 const express = require("express");
 const router = express.Router();
-const {getSystemAdmin} = require("../controllers/systemadmin.controllers");
+const {get_SystemAdmin, create_SystemAdmin, update_SystemAdmin} = require("../controllers/systemadmin.controllers");
 
-router.get("/", getSystemAdmin);
+router.get("/", get_SystemAdmin);
+router.post("/", create_SystemAdmin);
+router.put("/", update_SystemAdmin);
 
 module.exports = router;
