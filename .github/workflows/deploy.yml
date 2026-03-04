@@ -26,7 +26,7 @@ jobs:
         run: npm ci
 
       # 4. (Optional) Run tests
-      # - name: Run tests
+      # - name: Run testss
       #   run: npm test
 
       # 5. Login to Azure using App Registration
