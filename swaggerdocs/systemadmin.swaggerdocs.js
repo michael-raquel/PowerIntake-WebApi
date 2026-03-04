@@ -74,12 +74,12 @@
 
 /**
  * @swagger
- * /systemadmin:
+ * /systemadmin/{systemadminuuid}:
  *   put:
  *     summary: Update an existing system administrator
  *     tags: [System Admin]
  *     parameters:
- *       - in: params
+ *       - in: path
  *         name: systemadminuuid
  *         schema:
  *           type: string
