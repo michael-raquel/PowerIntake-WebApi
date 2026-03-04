@@ -4,6 +4,6 @@ const {get_SystemAdmin, create_SystemAdmin, update_SystemAdmin} = require("../co
 
 router.get("/", get_SystemAdmin);
 router.post("/", create_SystemAdmin);
-router.put("/", update_SystemAdmin);
+router.put("/:systemadminuuid", update_SystemAdmin);
 
 module.exports = router;

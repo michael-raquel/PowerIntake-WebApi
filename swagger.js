@@ -27,7 +27,7 @@ const setupSwagger = (app) => {
           const observer = new MutationObserver(function () {
             const filterInput = document.querySelector('.operation-filter-input');
             if (filterInput && !document.querySelector('#custom-filter-label')) {
-              filterInput.placeholder = 'Diri ka mag search ug tag name...';
+              filterInput.placeholder = 'Search correct Tag Name here...';
 
               const label = document.createElement('label');
               label.id = 'custom-filter-label';
