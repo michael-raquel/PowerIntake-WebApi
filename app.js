@@ -1,13 +1,15 @@
 const express = require('express');
 const dotenv = require('dotenv');
-const setupSwagger = require('./swagger');
-
 dotenv.config();
+
+const setupSwagger = require('./swagger');
+const cors = require('cors');
 
 const app = express();
 
-setupSwagger(app);
+app.use(cors());
 app.use(express.json());
+setupSwagger(app);
 
 const systemadmin = require("./routes/systemadmin.routes");
 app.use("/systemadmin", systemadmin);
