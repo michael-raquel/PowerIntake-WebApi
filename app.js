@@ -11,6 +11,21 @@ app.use(cors());
 app.use(express.json());
 setupSwagger(app);
 
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); 
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS blocked: ${origin} is not allowed`));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
 const systemadmin = require("./routes/systemadmin.routes");
 app.use("/systemadmin", systemadmin);
 
@@ -23,4 +38,8 @@ app.listen(PORT, () => {
   console.log(`Server is running on port http://localhost:${PORT}`);
 });
 
+<<<<<<< Updated upstream
 module.exports = app;
+=======
+module.exports = app; 
+>>>>>>> Stashed changes

@@ -150,3 +150,64 @@
  *       500:
  *         description: Internal Server Error
  */
+
+/**
+ * @swagger
+ * /users/all-users-with-details:
+ *   get:
+ *     summary: Get all users with their manager, direct reports, groups, and roles
+ *     tags: [Users]
+ *     responses:
+ *       200:
+ *         description: List of all users with complete details
+ *         content:
+ *           application/json:
+ *             example:
+ *               count: 2
+ *               users:
+ *                 - id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+ *                   displayName: "Juan dela Cruz"
+ *                   givenName: "Juan"
+ *                   surname: "dela Cruz"
+ *                   mail: "juan@spartaservices.com"
+ *                   userPrincipalName: "juan@spartaservices.com"
+ *                   jobTitle: "Software Engineer"
+ *                   department: "Engineering"
+ *                   officeLocation: "Makati"
+ *                   mobilePhone: "09123456789"
+ *                   businessPhones: ["02-1234567"]
+ *                   preferredLanguage: "en-US"
+ *                   accountEnabled: true
+ *                   city: "Makati"
+ *                   companyName: "Sparta Services"
+ *                   country: "PH"
+ *                   createdDateTime: "2024-01-01T00:00:00Z"
+ *                   employeeId: "EMP001"
+ *                   employeeType: "Employee"
+ *                   usageLocation: "PH"
+ *                   userType: "Member"
+ *                   manager:
+ *                     id: "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+ *                     displayName: "Maria Santos"
+ *                     mail: "maria@spartaservices.com"
+ *                     jobTitle: "Engineering Manager"
+ *                   directReports:
+ *                     - id: "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
+ *                       displayName: "Pedro Reyes"
+ *                       mail: "pedro@spartaservices.com"
+ *                       jobTitle: "Junior Developer"
+ *                   groups:
+ *                     - id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+ *                       displayName: "Engineering Team"
+ *                       groupTypes: ["Unified"]
+ *                       securityEnabled: true
+ *                   roles:
+ *                     - id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+ *                       displayName: "Global Administrator"
+ *                       description: "Can manage all aspects of Azure AD"
+ *                       roleTemplateId: "62e90394-69f5-4237-9190-012177145e10"
+ *       500:
+ *         description: Internal Server Error
+ *       504:
+ *         description: No response from Microsoft Graph (Timeout or Network Issue)
+ */
