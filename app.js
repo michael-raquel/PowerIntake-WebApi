@@ -7,10 +7,6 @@ const cors = require('cors');
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
-setupSwagger(app);
-
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [];
 
 app.use(cors({
@@ -26,6 +22,9 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
+app.use(express.json());  
+setupSwagger(app);        
+
 const systemadmin = require("./routes/systemadmin.routes");
 app.use("/systemadmin", systemadmin);
 
@@ -39,4 +38,3 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
-
