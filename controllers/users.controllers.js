@@ -3,9 +3,32 @@ const { getAccessToken } = require('../config/authService');
 
 const GRAPH_URL = 'https://graph.microsoft.com/v1.0';
 const USER_FIELDS = [
-  'id', 'displayName', 'mail', 'userPrincipalName',
-  'jobTitle', 'department', 'officeLocation',
-  'mobilePhone', 'businessPhones'
+ 
+  'id',
+  'displayName',
+  'givenName',
+  'surname',
+  'mail',
+  'userPrincipalName',
+  'jobTitle',
+  'department',
+  'officeLocation',
+  'mobilePhone',
+  'businessPhones',
+  'preferredLanguage',
+  'accountEnabled',
+
+  'ageGroup',
+  'city',
+  'companyName',
+  'country',
+  'createdDateTime',
+  'mailNickname',
+  'proxyAddresses',
+  'state',
+  'streetAddress',
+  'usageLocation',
+  'userType',
 ].join(',');
 
 const get_AllUsers = async (req, res) => {
@@ -112,10 +135,74 @@ const get_UserFullProfile = async (req, res) => {
   }
 };
 
+
+const get_AllUsersWithDetails = async (req, res) => {
+  try {
+    const token = await getAccessToken();
+    const headers = { Authorization: `Bearer ${token}` };
+
+    const usersRes = await axios.get(`${GRAPH_URL}/users`, {
+      headers,
+      params: { $select: USER_FIELDS, $top: 999 },
+      timeout: 10000,
+    });
+
+    const users = usersRes.data.value;
+
+    const enrichedUsers = await Promise.all(
+      users.map(async (user) => {
+        const [managerRes, reportsRes, groupsRes, rolesRes] = await Promise.allSettled([
+          axios.get(`${GRAPH_URL}/users/${user.id}/manager`, { headers }),
+          axios.get(`${GRAPH_URL}/users/${user.id}/directReports`, { headers }),
+          axios.get(`${GRAPH_URL}/users/${user.id}/memberOf`, {
+            headers,
+            params: { $select: 'id,displayName,groupTypes,securityEnabled' }
+          }),
+          axios.get(`${GRAPH_URL}/users/${user.id}/memberOf/microsoft.graph.directoryRole`, {
+            headers,
+            params: { $select: 'id,displayName,description,roleTemplateId' }
+          }),
+        ]);
+
+        return {
+          ...user,
+          manager:       managerRes.status  === 'fulfilled' ? managerRes.value.data          : null,
+          directReports: reportsRes.status  === 'fulfilled' ? reportsRes.value.data.value    : [],
+          groups:        groupsRes.status   === 'fulfilled' ? groupsRes.value.data.value     : [],
+          roles:         rolesRes.status    === 'fulfilled' ? rolesRes.value.data.value      : [],
+        };
+      })
+    );
+
+    return res.status(200).json({
+      count: enrichedUsers.length,
+      users: enrichedUsers,
+    });
+
+  } catch (err) {
+    console.error("get_AllUsersWithDetails error:", err.message);
+
+    if (err.response) {
+      return res.status(err.response.status).json({
+        error: err.response.data?.error?.message || "Graph API Error",
+      });
+    }
+
+    if (err.request) {
+      return res.status(504).json({
+        error: "No response from Microsoft Graph (Timeout or Network Issue)",
+      });
+    }
+
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 module.exports = {
   get_AllUsers,
   get_UserById,
   get_UserManager,
   get_UserDirectReports,
   get_UserFullProfile,
+  get_AllUsersWithDetails
 };
