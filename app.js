@@ -38,8 +38,5 @@ app.listen(PORT, () => {
   console.log(`Server is running on port http://localhost:${PORT}`);
 });
 
-<<<<<<< Updated upstream
 module.exports = app;
-=======
-module.exports = app; 
->>>>>>> Stashed changes
+
