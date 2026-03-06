@@ -31,6 +31,9 @@ app.use("/systemadmin", systemadmin);
 const users = require("./routes/users.routes");
 app.use("/users", users);
 
+const notes = require("./routes/notes.routes");
+app.use("/notes", notes);
+
 const PORT = process.env.PORT;
 
 app.listen(PORT, () => {
