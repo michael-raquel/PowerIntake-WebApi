@@ -33,7 +33,10 @@ const users = require("./routes/users.routes");
 app.use("/users", users);
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 =======
+=======
+>>>>>>> Stashed changes
 const groups = require('./routes/groups.routes');
 app.use('/groups', groups);
 
