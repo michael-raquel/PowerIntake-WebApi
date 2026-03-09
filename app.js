@@ -32,6 +32,18 @@ app.use("/systemadmin", systemadmin);
 const users = require("./routes/users.routes");
 app.use("/users", users);
 
+<<<<<<< Updated upstream
+=======
+const groups = require('./routes/groups.routes');
+app.use('/groups', groups);
+
+const tickets = require('./routes/tickets.routes');
+app.use('/tickets', tickets);
+
+const notes = require("./routes/notes.routes");
+app.use("/notes", notes);
+
+>>>>>>> Stashed changes
 const PORT = process.env.PORT;
 
 app.listen(PORT, () => {
