@@ -7,10 +7,6 @@ const cors = require('cors');
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
-setupSwagger(app);
-
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [];
 
 app.use(cors({
@@ -26,23 +22,16 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
+app.use(express.json());  
+setupSwagger(app);        
+
 const systemadmin = require("./routes/systemadmin.routes");
 app.use("/systemadmin", systemadmin);
 
 const users = require("./routes/users.routes");
 app.use("/users", users);
 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
+
 const groups = require('./routes/groups.routes');
 app.use('/groups', groups);
 
@@ -52,7 +41,10 @@ app.use('/tickets', tickets);
 const notes = require("./routes/notes.routes");
 app.use("/notes", notes);
 
->>>>>>> Stashed changes
+
+const notes = require("./routes/notes.routes");
+app.use("/notes", notes);
+
 const PORT = process.env.PORT;
 
 app.listen(PORT, () => {
@@ -60,4 +52,3 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
-
