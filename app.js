@@ -18,7 +18,7 @@ app.use(cors({
       callback(new Error(`CORS blocked: ${origin} is not allowed`));
     }
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
@@ -31,16 +31,11 @@ app.use("/systemadmin", systemadmin);
 const users = require("./routes/users.routes");
 app.use("/users", users);
 
-
 const groups = require('./routes/groups.routes');
 app.use('/groups', groups);
 
 const tickets = require('./routes/tickets.routes');
 app.use('/tickets', tickets);
-
-const notes = require("./routes/notes.routes");
-app.use("/notes", notes);
-
 
 const notes = require("./routes/notes.routes");
 app.use("/notes", notes);

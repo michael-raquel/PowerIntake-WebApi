@@ -3,6 +3,6 @@ const router = express.Router();
 const {create_Ticket} = require("../controllers/tickets.controllers");
 const validateToken = require("../middlewares/validateToken");
 
-router.post("/", validateToken, create_Ticket);
+router.post("/", create_Ticket);
 
 module.exports = router;
