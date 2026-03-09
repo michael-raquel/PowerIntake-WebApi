@@ -198,11 +198,52 @@ const get_AllUsersWithDetails = async (req, res) => {
   }
 };
 
+const get_UserGroups = async (req, res) => {
+  try {
+    const { id } = req.query;
+    const token = await getAccessToken();
+    const headers = { Authorization: `Bearer ${token}` };
+
+    const [directRes, transitiveRes] = await Promise.allSettled([
+      axios.get(`${GRAPH_URL}/users/${id}/memberOf`, {
+        headers,
+        params: { $select: 'id,displayName,groupTypes,securityEnabled,mail' },
+      }),
+      axios.get(`${GRAPH_URL}/users/${id}/transitiveMemberOf/microsoft.graph.group`, {
+        headers,
+        params: { $select: 'id,displayName,groupTypes,securityEnabled,mail' },
+      }),
+    ]);
+
+    res.status(200).json({
+      directGroups:     directRes.status     === 'fulfilled' ? directRes.value.data.value     : [],
+      transitiveGroups: transitiveRes.status === 'fulfilled' ? transitiveRes.value.data.value : [],
+    });
+
+  } catch (err) {
+
+    if (err.response) {
+      return res.status(err.response.status).json({
+        error: err.response.data?.error?.message || "Graph API Error",
+      });
+    }
+
+    if (err.request) {
+      return res.status(504).json({
+        error: "No response from Microsoft Graph (Timeout or Network Issue)",
+      });
+    }
+
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 module.exports = {
   get_AllUsers,
   get_UserById,
   get_UserManager,
   get_UserDirectReports,
   get_UserFullProfile,
-  get_AllUsersWithDetails
+  get_AllUsersWithDetails,
+  get_UserGroups
 };

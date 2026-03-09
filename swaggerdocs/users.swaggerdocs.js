@@ -211,3 +211,49 @@
  *       504:
  *         description: No response from Microsoft Graph (Timeout or Network Issue)
  */
+
+
+/**
+ * @swagger
+ * /users/groups:
+ *   get:
+ *     summary: Get all groups a user belongs to (direct and transitive)
+ *     tags: [Users]
+ *     parameters:
+ *       - in: query
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         example: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved user groups
+ *         content:
+ *           application/json:
+ *             example:
+ *               directGroups:
+ *                 - id: "group-uuid-001"
+ *                   displayName: "Engineering Team"
+ *                   mail: "engineering@sparta.com"
+ *                   groupTypes: ["Unified"]
+ *                   securityEnabled: false
+ *               transitiveGroups:
+ *                 - id: "group-uuid-002"
+ *                   displayName: "All Staff"
+ *                   mail: "allstaff@sparta.com"
+ *                   groupTypes: []
+ *                   securityEnabled: true
+ *       504:
+ *         description: Timeout or Network Issue
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "No response from Microsoft Graph (Timeout or Network Issue)"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
