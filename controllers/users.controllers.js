@@ -238,6 +238,38 @@ const get_UserGroups = async (req, res) => {
   }
 };
 
+const get_UserAppRoleAssignments = async (req, res) => {
+  try {
+    const { id } = req.query;
+    const response = await axios.get(`${GRAPH_URL}/users/${id}/appRoleAssignments`, {
+      headers: { Authorization: `Bearer ${await getAccessToken()}` },
+      params: { $select: 'id,appRoleId,resourceId,resourceDisplayName,principalId' },
+    });
+
+    res.status(200).json({
+      count: response.data.value.length,
+      appRoleAssignments: response.data.value,
+    });
+
+  } catch (err) {
+    console.error("get_UserAppRoleAssignments error:", err.message);
+
+    if (err.response) {
+      return res.status(err.response.status).json({
+        error: err.response.data?.error?.message || "Graph API Error",
+      });
+    }
+
+    if (err.request) {
+      return res.status(504).json({
+        error: "No response from Microsoft Graph (Timeout or Network Issue)",
+      });
+    }
+
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 module.exports = {
   get_AllUsers,
   get_UserById,
@@ -245,5 +277,6 @@ module.exports = {
   get_UserDirectReports,
   get_UserFullProfile,
   get_AllUsersWithDetails,
-  get_UserGroups
+  get_UserGroups,
+  get_UserAppRoleAssignments
 };

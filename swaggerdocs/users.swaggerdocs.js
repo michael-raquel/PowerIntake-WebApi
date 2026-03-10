@@ -257,3 +257,46 @@
  *             example:
  *               error: "Internal Server Error"
  */
+
+/**
+ * @swagger
+ * /users/app-role-assignments:
+ *   get:
+ *     summary: Get app role assignments of a user
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Azure AD User ID
+ *         example: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved app role assignments
+ *         content:
+ *           application/json:
+ *             example:
+ *               count: 1
+ *               appRoleAssignments:
+ *                 - id: "uuid-here"
+ *                   appRoleId: "abc123-..."
+ *                   resourceId: "uuid-here"
+ *                   resourceDisplayName: "powerintake"
+ *                   principalId: "9e6f25b6-..."
+ *       504:
+ *         description: Timeout or Network Issue
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "No response from Microsoft Graph (Timeout or Network Issue)"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
