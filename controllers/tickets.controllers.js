@@ -3,7 +3,7 @@ const client = require("../config/db");
 const get_Tickets = async (req, res) => {
     try {
         const { ticketuuid, userid } = req.query;
-        
+
         const result = await client.query(
             "SELECT * FROM ticket_get($1, $2)",
             [ticketuuid || null, userid || null]
