@@ -1,15 +1,19 @@
 const jwt = require("jsonwebtoken");
 const jwksClient = require("jwks-rsa");
 
-const client = jwksClient({
-  jwksUri: `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID}/discovery/v2.0/keys`,
-});
+function getJwksClient(tenantId) {
+  return jwksClient({
+    jwksUri: `https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`,
+    cache: true,
+    rateLimit: true,
+  });
+}
 
-function getKey(header, callback) {
+function getKey(header, tenantId, callback) {
+  const client = getJwksClient(tenantId);
   client.getSigningKey(header.kid, (err, key) => {
     if (err) return callback(err);
-    const signingKey = key.getPublicKey();
-    callback(null, signingKey);
+    callback(null, key.getPublicKey());
   });
 }
 
@@ -22,20 +26,29 @@ const validateToken = (req, res, next) => {
 
   const token = authHeader.split(" ")[1];
 
+  const decoded = jwt.decode(token, { complete: true });
+
+  if (!decoded?.payload?.tid) {
+    return res.status(401).json({ error: "Unauthorized: Invalid token structure" });
+  }
+
+  const tenantId = decoded.payload.tid; 
+
   jwt.verify(
     token,
-    getKey,
+    (header, callback) => getKey(header, tenantId, callback),
     {
-      audience: process.env.AZURE_CLIENT_ID, // Now correctly your app
-      issuer: `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID}/v2.0`,
+      audience: process.env.AZURE_CLIENT_ID,
+      issuer: `https://login.microsoftonline.com/${tenantId}/v2.0`,
       algorithms: ["RS256"],
     },
-    (err, decoded) => {
+    (err, decodedToken) => {
       if (err) {
         console.error("Token validation failed:", err.message);
         return res.status(401).json({ error: "Unauthorized: Invalid token" });
       }
-      req.user = decoded;
+      req.user = decodedToken;
+      req.tenantId = tenantId; 
       next();
     }
   );

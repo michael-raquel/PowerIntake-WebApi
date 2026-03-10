@@ -1,7 +1,20 @@
 const client = require("../config/db");
-const axios = require("axios");
 
-const DYNAMICS_URL = process.env.DYNAMICS_URL;
+const get_Tickets = async (req, res) => {
+    try {
+        const { ticketuuid, userid } = req.query;
+        
+        const result = await client.query(
+            "SELECT * FROM ticket_get($1, $2)",
+            [ticketuuid || null, userid || null]
+        );
+
+        res.status(200).json(result.rows);
+    }   
+    catch (err) {
+        res.status(500).send("Internal Server Error");
+    }
+};
 
 const create_Ticket = async (req, res) => {
     try {
@@ -18,11 +31,6 @@ const create_Ticket = async (req, res) => {
             attachments,
             createdby,
         } = req.body;
-
-        const accessToken = req.headers.authorization?.split(' ')[1];
-        if (!accessToken) {
-            return res.status(401).json({ error: 'No access token provided' });
-        }
 
         const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
 
@@ -45,40 +53,12 @@ const create_Ticket = async (req, res) => {
 
         const ticketuuid = result.rows[0].ticket_create;
 
-        const dynamicsResponse = await axios.post(
-            `${DYNAMICS_URL}/api/data/v9.2/incidents`,
-            {
-                title: title,
-                description: description,
-                ticketnumber: ticketuuid,
-            },
-            {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json',
-                    'OData-MaxVersion': '4.0',
-                    'OData-Version': '4.0',
-                    'Accept': 'application/json',
-                },
-            }
-        );
-
-        const dynamicsIncidentId = dynamicsResponse.headers['odata-entityid']
-            ?.match(/\(([^)]+)\)/)?.[1] || null;
-
         return res.status(201).json({
             ticketuuid,
-            dynamicsincidentid: dynamicsIncidentId,
         });
 
     } catch (err) {
         console.error("create_Ticket error:", err.message);
-
-        if (err.response?.data) {
-            return res.status(err.response.status).json({
-                error: err.response.data?.error?.message || "Dynamics API Error",
-            });
-        }
 
         if (err.message) {
             return res.status(400).json({ error: err.message });
@@ -90,4 +70,5 @@ const create_Ticket = async (req, res) => {
 
 module.exports = {
     create_Ticket,
+    get_Tickets
 };
