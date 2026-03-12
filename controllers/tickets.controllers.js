@@ -16,6 +16,24 @@ const get_Ticket = async (req, res) => {
     }
 };
 
+const get_Ticket_Status = async (req, res) => {
+    try {
+
+        const { ticketuuid } = req.query;
+
+        const result = await client.query(
+            "SELECT * FROM ticketstatus_get($1)",
+            [ticketuuid]
+        );
+     
+        res.status(200).json(result.rows[0]);
+
+    } catch (err) {
+      
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
 const create_Ticket = async (req, res) => {
     try {
         const {
@@ -116,5 +134,6 @@ const update_Ticket = async (req, res) => {
 module.exports = {
     create_Ticket,
     get_Ticket,
-    update_Ticket
+    update_Ticket,
+    get_Ticket_Status
 };

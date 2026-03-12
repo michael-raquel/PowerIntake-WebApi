@@ -97,6 +97,53 @@
  *               error: "Internal Server Error"
  */
  
+
+/**
+ * @swagger
+ * /tickets/status:
+ *   get:
+ *     summary: Get ticket status
+ *     description: Retrieves the status of a specific ticket using its UUID.
+ *     tags:
+ *       - Tickets
+ *     parameters:
+ *       - in: query
+ *         name: ticketuuid
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The UUID of the ticket to retrieve status for
+ *         example: "340a5679-ad90-4275-b082-7375698f08fb"
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Ticket status retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ticketuuid:
+ *                   type: string
+ *                   format: uuid
+ *                   example: "340a5679-ad90-4275-b082-7375698f08fb"
+ *                 status:
+ *                   type: string
+ *                   example: "Open"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Internal Server Error"
+ */
+
 /**
  * @swagger
  * /tickets:
