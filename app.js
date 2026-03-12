@@ -25,6 +25,9 @@ app.use(cors({
 app.use(express.json());  
 setupSwagger(app);        
 
+const images = require("./routes/images.routes");
+app.use("/images", images);
+
 const systemadmin = require("./routes/systemadmin.routes");
 app.use("/systemadmin", systemadmin);
 
