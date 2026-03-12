@@ -1,14 +1,14 @@
 const client = require("../config/db");
 
-const get_Tickets = async (req, res) => {
+const get_Ticket = async (req, res) => {
     try {
-        const { ticketuuid, userid } = req.query;
-
+        const { ticketuuid, entrauserid } = req.query;
+ 
         const result = await client.query(
             "SELECT * FROM ticket_get($1, $2)",
-            [ticketuuid || null, userid || null]
+            [ticketuuid || null, entrauserid || null]
         );
-
+ 
         res.status(200).json(result.rows);
     }   
     catch (err) {
@@ -31,9 +31,9 @@ const create_Ticket = async (req, res) => {
             attachments,
             createdby,
         } = req.body;
-
+ 
         const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
-
+ 
         const result = await client.query(
             "SELECT * FROM ticket_create($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
             [
@@ -50,25 +50,71 @@ const create_Ticket = async (req, res) => {
                 createdby,
             ]
         );
-
+ 
         const ticketuuid = result.rows[0].ticket_create;
-
+ 
         return res.status(201).json({
             ticketuuid,
         });
-
+ 
     } catch (err) {
         console.error("create_Ticket error:", err.message);
-
+ 
         if (err.message) {
             return res.status(400).json({ error: err.message });
         }
-
+ 
         res.status(500).json({ error: "Internal Server Error" });
     }
 };
-
+ 
+const update_Ticket = async (req, res) => {
+    try {
+        const {
+            ticketuuid,
+            title,
+            description,
+            usertimezone,
+            officelocation,
+            date,
+            starttime,
+            endtime,
+            attachments,
+            modifiedby,
+        } = req.body;
+ 
+        const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
+ 
+        const result = await client.query(
+            "SELECT * FROM ticket_update($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            [
+                ticketuuid,
+                title,
+                description,
+                usertimezone,
+                officelocation,
+                toArray(date),
+                toArray(starttime),
+                toArray(endtime),
+                toArray(attachments),
+                modifiedby
+            ]
+        );
+ 
+        res.status(200).json(result.rows[0]);
+    } catch (err) {
+        console.error("update_Ticket error:", err.message);
+ 
+        if (err.message) {
+            return res.status(400).json({ error: err.message });
+        }
+ 
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+ 
 module.exports = {
     create_Ticket,
-    get_Tickets
+    get_Ticket,
+    update_Ticket
 };
