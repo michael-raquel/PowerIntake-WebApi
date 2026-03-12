@@ -4,12 +4,12 @@
  *   name: Tickets
  *   description: Ticket management endpoints
  */
-
+ 
 /**
  * @swagger
  * /tickets:
  *   get:
- *     summary: Get tickets (all, by ticket UUID, or by user ID)
+ *     summary: Get tickets (all, by ticket UUID, or by EntraUserID)
  *     tags: [Tickets]
  *     security:
  *       - bearerAuth: []
@@ -22,62 +22,73 @@
  *         description: Filter by ticket UUID (returns single ticket)
  *         example: "340a5679-ad90-4275-b082-7375698f08fb"
  *       - in: query
- *         name: userid
+ *         name: entrauserid
  *         required: false
  *         schema:
- *           type: integer
- *         description: Filter by user ID (returns all tickets of that user)
- *         example: 1
+ *           type: string
+ *         description: Filter by Entra User ID (returns all tickets of that user)
+ *         example: "aabbccdd-1234-5678-abcd-ef1234567890"
  *     responses:
  *       200:
  *         description: Successfully retrieved tickets
  *         content:
  *           application/json:
  *             example:
- *               - ticketid: 1
- *                 ticketuuid: "340a5679-ad90-4275-b082-7375698f08fb"
- *                 ticketnumber: "TKT-0001"
- *                 userid: 1
- *                 entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
- *                 username: "John Doe"
- *                 jobtitle: "Software Engineer"
- *                 useremail: "john.doe@sparta.com"
- *                 department: "Engineering"
- *                 entratechnicianid: null
- *                 title: "Server is down"
- *                 description: "Production server is not responding"
- *                 timezone: "Asia/Manila"
- *                 officelocation: "remote"
- *                 category: null
- *                 priority: null
- *                 status: "Open"
- *                 closurenote: null
- *                 closuredate: null
- *                 tenantid: 1
- *                 entratenantid: "1159156a-3971-429d-bb02-bd37b1223d24"
- *                 tenantname: "Sparta Services LLC"
- *                 tenantemail: "admin@sparta.com"
- *                 createdat: "2024-01-01T09:00:00Z"
- *                 createdby: "john.doe@sparta.com"
- *                 modifiedat: null
- *                 modifiedby: null
- *                 notes: []
- *                 attachments:
+ *               - v_ticketid: 1
+ *                 v_ticketuuid: "340a5679-ad90-4275-b082-7375698f08fb"
+ *                 v_ticketnumber: "TKT-2026-000001"
+ *                 v_technicianid: "entra-tech-001"
+ *                 v_technicianname: "Alex Rivera"
+ *                 v_ticketlifecycle: "Active"
+ *                 v_ticketcategory: "Network"
+ *                 v_priority: "High"
+ *                 v_status: "Submitted"
+ *                 v_closurenote: null
+ *                 v_closuredate: null
+ *                 v_userid: 1
+ *                 v_entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *                 v_username: "John Doe"
+ *                 v_jobtitle: "Software Engineer"
+ *                 v_useremail: "john.doe@sparta.com"
+ *                 v_department: "Engineering"
+ *                 v_title: "Server is down"
+ *                 v_description: "Production server is not responding"
+ *                 v_usertimezone: "Asia/Manila"
+ *                 v_officelocation: "remote"
+ *                 v_tenantid: 1
+ *                 v_entratenantid: "1159156a-3971-429d-bb02-bd37b1223d24"
+ *                 v_tenantname: "Sparta Services LLC"
+ *                 v_tenantemail: "admin@sparta.com"
+ *                 v_createdat: "2026-01-01T09:00:00Z"
+ *                 v_createdby: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *                 v_modifiedat: null
+ *                 v_modifiedby: null
+ *                 v_notes: []
+ *                 v_attachments:
  *                   - v_attachmentid: 1
  *                     v_attachmentuuid: "uuid-here"
  *                     v_attachment: "file1.pdf"
- *                     v_createdat: "2024-01-01T09:00:00Z"
- *                     v_createdby: "john.doe@sparta.com"
- *                 supportcalls:
+ *                     v_createdat: "2026-01-01T09:00:00Z"
+ *                     v_createdby: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *                 v_supportcalls:
  *                   - v_supportcallid: 1
  *                     v_supportcalluuid: "uuid-here"
- *                     v_date: "2024-01-01"
+ *                     v_date: "2026-01-01"
  *                     v_starttime: "09:00:00"
  *                     v_endtime: "10:00:00"
- *                     v_createdat: "2024-01-01T09:00:00Z"
- *                     v_createdby: "john.doe@sparta.com"
- *                 tickettechnicians: []
- *                 ticketstatuses: []
+ *                     v_createdat: "2026-01-01T09:00:00Z"
+ *                     v_createdby: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *                 v_tickettechnicians:
+ *                   - v_tickettechnicianid: 1
+ *                     v_entratechnicianid: "entra-tech-001"
+ *                     v_technicianname: "Alex Rivera"
+ *                     v_createdat: "2026-01-01T09:00:00Z"
+ *                     v_createdby: "entra-user-admin"
+ *                 v_ticketstatuses:
+ *                   - v_ticketstatusid: 1
+ *                     v_status: "Submitted"
+ *                     v_createdat: "2026-01-01T09:00:00Z"
+ *                     v_createdby: "aabbccdd-1234-5678-abcd-ef1234567890"
  *       500:
  *         description: Internal Server Error
  *         content:
@@ -85,13 +96,15 @@
  *             example:
  *               error: "Internal Server Error"
  */
-
+ 
 /**
  * @swagger
  * /tickets:
  *   post:
  *     summary: Create a new ticket
  *     tags: [Tickets]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -101,13 +114,13 @@
  *             entratenantid: "1159156a-3971-429d-bb02-bd37b1223d24"
  *             title: "Server is down"
  *             description: "Production server is not responding"
- *             date: ["2024-01-01", "2024-01-02", "2024-01-03"]
+ *             date: ["2026-01-01", "2026-01-02", "2026-01-03"]
  *             starttime: ["09:00", "10:00", "14:00"]
  *             endtime: ["10:00", "11:00", "15:00"]
  *             usertimezone: "Asia/Manila"
  *             officelocation: "remote"
  *             attachments: ["file1.pdf", "screenshot.png"]
- *             createdby: "john.doe@sparta.com"
+ *             createdby: "aabbccdd-1234-5678-abcd-ef1234567890"
  *     responses:
  *       201:
  *         description: Successfully created, returns new ticket UUID
@@ -119,8 +132,70 @@
  *         description: Validation Error
  *         content:
  *           application/json:
+ *             examples:
+ *               startTimeError:
+ *                 summary: Start time not before end time
+ *                 value:
+ *                   error: "Start time must be earlier than end time."
+ *               overlapError:
+ *                 summary: Overlapping support call schedules
+ *                 value:
+ *                   error: "Support call schedules have overlapping times."
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
  *             example:
- *               error: "Start time must be earlier than end time."
+ *               error: "Internal Server Error"
+ */
+ 
+/**
+ * @swagger
+ * /tickets:
+ *   put:
+ *     summary: Update an existing ticket
+ *     tags: [Tickets]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           example:
+ *             ticketuuid: "340a5679-ad90-4275-b082-7375698f08fb"
+ *             title: "Server is down - Updated"
+ *             description: "Production server is still not responding after restart."
+ *             usertimezone: "Asia/Manila"
+ *             officelocation: "hybrid"
+ *             date: ["2026-01-05", "2026-01-06"]
+ *             starttime: ["09:00", "13:00"]
+ *             endtime: ["10:30", "14:00"]
+ *             attachments: ["updated-log.txt", "new-screenshot.png"]
+ *             modifiedby: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *     responses:
+ *       200:
+ *         description: Successfully updated, returns ticket UUID
+ *         content:
+ *           application/json:
+ *             example:
+ *               ticket_update: "340a5679-ad90-4275-b082-7375698f08fb"
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             examples:
+ *               notFound:
+ *                 summary: Ticket not found or deleted
+ *                 value:
+ *                   error: "VALIDATION_ERROR: Ticket with UUID 340a5679-ad90-4275-b082-7375698f08fb does not exist or has been deleted."
+ *               startTimeError:
+ *                 summary: Start time not before end time
+ *                 value:
+ *                   error: "Start time must be earlier than end time."
+ *               overlapError:
+ *                 summary: Overlapping support call schedules
+ *                 value:
+ *                   error: "Support call schedules have overlapping times."
  *       500:
  *         description: Internal Server Error
  *         content:
