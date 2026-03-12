@@ -40,9 +40,11 @@ app.use('/tickets', tickets);
 const usersettings = require('./routes/usersettings.routes');
 app.use('/usersettings', usersettings);   
 
+const attachments = require("./routes/attachments.routes");
+app.use("/attachments", attachments);
+
 const notes = require("./routes/notes.routes");
 app.use("/notes", notes);
-
 
 const PORT = process.env.PORT;
 
