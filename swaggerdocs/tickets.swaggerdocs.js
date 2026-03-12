@@ -96,20 +96,18 @@
  *             example:
  *               error: "Internal Server Error"
  */
- 
-
-/**
+ /**
  * @swagger
  * /tickets/status:
  *   get:
  *     summary: Get ticket status
- *     description: Retrieves the status of a specific ticket using its UUID.
+ *     description: Retrieves the status of a specific ticket using its UUID. Returns all statuses if no UUID is provided.
  *     tags:
  *       - Tickets
  *     parameters:
  *       - in: query
  *         name: ticketuuid
- *         required: true
+ *         required: false
  *         schema:
  *           type: string
  *           format: uuid
@@ -125,13 +123,49 @@
  *             schema:
  *               type: object
  *               properties:
- *                 ticketuuid:
+ *                 v_ticketstatusid:
+ *                   type: integer
+ *                   example: 1
+ *                 v_ticketid:
+ *                   type: integer
+ *                   example: 42
+ *                 v_ticketuuid:
  *                   type: string
  *                   format: uuid
  *                   example: "340a5679-ad90-4275-b082-7375698f08fb"
- *                 status:
+ *                 v_ticketnumber:
+ *                   type: string
+ *                   example: "TKT-0001"
+ *                 v_status:
  *                   type: string
  *                   example: "Open"
+ *                 v_createdat:
+ *                   type: string
+ *                   format: date-time
+ *                   example: "2026-03-12T09:00:00.000Z"
+ *                 v_createdby:
+ *                   type: string
+ *                   example: "Ramric.Cardinal@SpartaServ.com"
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Unauthorized: No token provided"
+ *       404:
+ *         description: Ticket not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Ticket not found"
  *       500:
  *         description: Internal Server Error
  *         content:

@@ -23,10 +23,10 @@ const get_Ticket_Status = async (req, res) => {
 
         const result = await client.query(
             "SELECT * FROM ticketstatus_get($1)",
-            [ticketuuid]
+            [ticketuuid || null]
         );
      
-        res.status(200).json(result.rows[0]);
+        res.status(200).json(result.rows);
 
     } catch (err) {
       
