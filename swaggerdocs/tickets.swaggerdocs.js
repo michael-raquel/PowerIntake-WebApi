@@ -178,6 +178,72 @@
  *                   example: "Internal Server Error"
  */
 
+ /**
+ * @swagger
+ * /tickets/manager-team:
+ *   get:
+ *     summary: Get all tickets of a manager's direct reports
+ *     description: Fetches all direct reports of a manager from Microsoft Entra ID, then retrieves all tickets associated with each team member.
+ *     tags:
+ *       - Tickets
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: managerid
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The Entra User ID of the manager
+ *         example: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved tickets for all direct reports
+ *         content:
+ *           application/json:
+ *             example:
+ *               manager: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *               team:
+ *                 - user: "John Doe"
+ *                   entrauserid: "bbccddee-1234-5678-abcd-ef1234567890"
+ *                   tickets:
+ *                     - v_ticketid: 1
+ *                       v_ticketuuid: "340a5679-ad90-4275-b082-7375698f08fb"
+ *                       v_ticketnumber: "TKT-2026-000001"
+ *                       v_technicianid: "entra-tech-001"
+ *                       v_technicianname: "Alex Rivera"
+ *                       v_ticketlifecycle: "Active"
+ *                       v_ticketcategory: "Network"
+ *                       v_priority: "High"
+ *                       v_status: "Submitted"
+ *                       v_closurenote: null
+ *                       v_closuredate: null
+ *                       v_userid: 1
+ *                       v_entrauserid: "bbccddee-1234-5678-abcd-ef1234567890"
+ *                       v_username: "John Doe"
+ *                       v_jobtitle: "Software Engineer"
+ *                       v_useremail: "john.doe@sparta.com"
+ *                       v_department: "Engineering"
+ *                       v_title: "Server is down"
+ *                       v_description: "Production server is not responding"
+ *                       v_usertimezone: "Asia/Manila"
+ *                       v_officelocation: "remote"
+ *                       v_createdat: "2026-01-01T09:00:00Z"
+ *                       v_createdby: "bbccddee-1234-5678-abcd-ef1234567890"
+ *                       v_modifiedat: null
+ *                       v_modifiedby: null
+ *                 - user: "Jane Smith"
+ *                   entrauserid: "ccddeeaa-1234-5678-abcd-ef1234567890"
+ *                   tickets: []
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
+
 /**
  * @swagger
  * /tickets:
