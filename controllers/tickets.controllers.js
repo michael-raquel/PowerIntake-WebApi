@@ -5,17 +5,16 @@ const GRAPH_URL = "https://graph.microsoft.com/v1.0";
 
 const get_Ticket = async (req, res) => {
     try {
-        const { ticketuuid, entrauserid } = req.query;
- 
+        const { ticketuuid, entrauserid, entratenantid } = req.query;
+
         const result = await client.query(
-            "SELECT * FROM ticket_get($1, $2)",
-            [ticketuuid || null, entrauserid || null]
+            "SELECT * FROM ticket_get($1, $2, $3)",
+            [ticketuuid || null, entrauserid || null, entratenantid || null]
         );
- 
+
         res.status(200).json(result.rows);
-    }   
-    catch (err) {
-        res.status(500).send("Internal Server Error");
+    } catch (err) {
+        res.status(500).json({ error: "Internal Server Error" });
     }
 };
 
