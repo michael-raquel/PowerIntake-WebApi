@@ -9,7 +9,7 @@
  * @swagger
  * /tickets:
  *   get:
- *     summary: Get tickets (all, by ticket UUID, by EntraUserID, or by EntraTenantID)
+ *     summary: Get tickets (all, by ticket UUID, or by EntraUserID)
  *     tags: [Tickets]
  *     security:
  *       - bearerAuth: []
@@ -28,13 +28,6 @@
  *           type: string
  *         description: Filter by Entra User ID (returns all tickets of that user)
  *         example: "aabbccdd-1234-5678-abcd-ef1234567890"
- *       - in: query
- *         name: entratenantid
- *         required: false
- *         schema:
- *           type: string
- *         description: Filter by Entra Tenant ID (returns all tickets of that tenant)
- *         example: "1159156a-3971-429d-bb02-bd37b1223d24"
  *     responses:
  *       200:
  *         description: Successfully retrieved tickets
@@ -103,8 +96,7 @@
  *             example:
  *               error: "Internal Server Error"
  */
- 
-/**
+ /**
  * @swagger
  * /tickets/status:
  *   get:
@@ -112,8 +104,6 @@
  *     description: Retrieves the status of a specific ticket using its UUID. Returns all statuses if no UUID is provided.
  *     tags:
  *       - Tickets
- *     security:
- *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: ticketuuid
@@ -123,6 +113,8 @@
  *           format: uuid
  *         description: The UUID of the ticket to retrieve status for
  *         example: "340a5679-ad90-4275-b082-7375698f08fb"
+ *     security:
+ *       - BearerAuth: []
  *     responses:
  *       200:
  *         description: Ticket status retrieved successfully
@@ -143,17 +135,17 @@
  *                   example: "340a5679-ad90-4275-b082-7375698f08fb"
  *                 v_ticketnumber:
  *                   type: string
- *                   example: "TKT-2026-000001"
+ *                   example: "TKT-0001"
  *                 v_status:
  *                   type: string
- *                   example: "Submitted"
+ *                   example: "Open"
  *                 v_createdat:
  *                   type: string
  *                   format: date-time
  *                   example: "2026-03-12T09:00:00.000Z"
  *                 v_createdby:
  *                   type: string
- *                   example: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *                   example: "Ramric.Cardinal@SpartaServ.com"
  *       401:
  *         description: Unauthorized
  *         content:
@@ -185,8 +177,8 @@
  *                   type: string
  *                   example: "Internal Server Error"
  */
- 
-/**
+
+ /**
  * @swagger
  * /tickets/manager-team:
  *   get:
@@ -251,7 +243,7 @@
  *             example:
  *               error: "Internal Server Error"
  */
- 
+
 /**
  * @swagger
  * /tickets:
