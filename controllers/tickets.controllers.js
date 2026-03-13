@@ -1,4 +1,7 @@
 const client = require("../config/db");
+const axios = require("axios");
+const { getAccessToken } = require('../config/authService');
+const GRAPH_URL = "https://graph.microsoft.com/v1.0"; 
 
 const get_Ticket = async (req, res) => {
     try {
@@ -32,6 +35,41 @@ const get_Ticket_Status = async (req, res) => {
       
         res.status(500).json({ error: "Internal Server Error" });
     }
+};
+
+const get_ManagerTeamTickets = async (req, res) => {
+  try {
+    const { managerid } = req.query;
+
+    const directReportsResponse = await axios.get(
+      `${GRAPH_URL}/users/${managerid}/directReports`,
+      { headers: { Authorization: `Bearer ${await getAccessToken()}` } }
+    );
+
+    const directReports = directReportsResponse.data.value;
+
+    const ticketResults = await Promise.all(
+      directReports.map(async (user) => {
+        const result = await client.query(
+          "SELECT * FROM ticket_get($1, $2)",
+          [null, user.id]
+        );
+        return {
+          user: user.displayName,
+          entrauserid: user.id,
+          tickets: result.rows,
+        };
+      })
+    );
+
+    res.status(200).json({
+      manager: managerid,
+      team: ticketResults,
+    });
+
+  } catch (err) {
+    res.status(500).send("Internal Server Error");
+  }
 };
 
 const create_Ticket = async (req, res) => {
@@ -76,7 +114,6 @@ const create_Ticket = async (req, res) => {
         });
  
     } catch (err) {
-        console.error("create_Ticket error:", err.message);
  
         if (err.message) {
             return res.status(400).json({ error: err.message });
@@ -121,7 +158,6 @@ const update_Ticket = async (req, res) => {
  
         res.status(200).json(result.rows[0]);
     } catch (err) {
-        console.error("update_Ticket error:", err.message);
  
         if (err.message) {
             return res.status(400).json({ error: err.message });
@@ -135,5 +171,6 @@ module.exports = {
     create_Ticket,
     get_Ticket,
     update_Ticket,
-    get_Ticket_Status
+    get_Ticket_Status,
+    get_ManagerTeamTickets
 };
