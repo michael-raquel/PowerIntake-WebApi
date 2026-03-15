@@ -37,6 +37,9 @@ app.use("/systemadmin", systemadmin);
 const users = require("./routes/users.routes");
 app.use("/users", users);
 
+const manageusers = require("./routes/manageusers.routes");
+app.use("/manageusers", manageusers);
+
 const groups = require('./routes/groups.routes');
 app.use('/groups', groups);
 

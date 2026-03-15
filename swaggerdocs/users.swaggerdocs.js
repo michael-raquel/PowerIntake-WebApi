@@ -300,3 +300,106 @@
  *             example:
  *               error: "Internal Server Error"
  */
+
+
+/**
+ * @swagger
+ * /users/sync:
+ *   post:
+ *     summary: Sync Microsoft Entra ID users to the database (My Company Only)
+ *     description: Fetches all users from Microsoft Graph API and upserts them into the database using email as the unique identifier. New users are inserted, existing users are updated.
+ *     tags: [Users]
+ *     responses:
+ *       200:
+ *         description: Sync completed successfully
+ *         content:
+ *           application/json:
+ *             examples:
+ *               success:
+ *                 summary: Sync with results
+ *                 value:
+ *                   message: "Sync completed."
+ *                   total: 42
+ *                   synced: 40
+ *                   skipped: 2
+ *               noUsers:
+ *                 summary: No users found in Graph
+ *                 value:
+ *                   message: "No users found in Microsoft Graph."
+ *                   synced: 0
+ *       504:
+ *         description: Timeout or Network Issue
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "No response from Microsoft Graph (Timeout or Network Issue)"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
+
+/**
+ * @swagger
+ * /users/sync-all-tenants:
+ *   post:
+ *     summary: Sync Microsoft Entra ID users across all configured tenants
+ *     description: Fetches all tenants from the database, authenticates against each tenant using their stored credentials, then syncs all users into the database. Only new users are inserted. Skips tenants with no credentials configured.
+ *     tags: [Users]
+ *     responses:
+ *       200:
+ *         description: Multi-tenant sync completed
+ *         content:
+ *           application/json:
+ *             examples:
+ *               success:
+ *                 summary: Sync with results across tenants
+ *                 value:
+ *                   message: "Multi-tenant sync completed."
+ *                   total_tenants: 3
+ *                   results:
+ *                     - tenant: "Housing Co A"
+ *                       total: 50
+ *                       new: 5
+ *                       synced: 5
+ *                       skipped: 0
+ *                     - tenant: "Housing Co B"
+ *                       total: 30
+ *                       new: 0
+ *                       message: "All users already synced."
+ *                     - tenant: "Housing Co C"
+ *                       total: 20
+ *                       message: "No users found."
+ *                       synced: 0
+ *               noTenants:
+ *                 summary: No tenants configured
+ *                 value:
+ *                   message: "No tenants configured with credentials."
+ *               tenantError:
+ *                 summary: One tenant failed but others succeeded
+ *                 value:
+ *                   message: "Multi-tenant sync completed."
+ *                   total_tenants: 3
+ *                   results:
+ *                     - tenant: "Housing Co A"
+ *                       total: 50
+ *                       new: 5
+ *                       synced: 5
+ *                       skipped: 0
+ *                     - tenant: "Housing Co B"
+ *                       error: "Invalid client secret"
+ *       504:
+ *         description: Timeout or Network Issue
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "No response from Microsoft Graph (Timeout or Network Issue)"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
