@@ -28,6 +28,9 @@ app.use(cors({
 app.use(express.json());  
 setupSwagger(app);        
 
+const roles = require('./routes/roles.routes');
+app.use('/roles', roles);
+
 const images = require("./routes/images.routes");
 app.use("/images", images);
 
