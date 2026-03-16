@@ -251,6 +251,54 @@
  *             example:
  *               error: "Internal Server Error"
  */
+
+/**
+ * @swagger
+ * /tickets/manager:
+ *   get:
+ *     summary: Get tickets for a manager's team from the database
+ *     tags: [Tickets]
+ *     parameters:
+ *       - in: query
+ *         name: managerentrauserid
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Manager Entra user ID
+ *         example: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *       - in: query
+ *         name: status
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Filter by ticket status
+ *         example: "Submitted"
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved manager team tickets
+ *         content:
+ *           application/json:
+ *             example:
+ *               - v_ticketnumber: "TKT20260317-0000001"
+ *                 v_username: "John Doe"
+ *                 v_title: "Server is down"
+ *                 v_category: "Network"
+ *                 v_priority: "High"
+ *                 v_createdat: "2026-03-17T09:00:00Z"
+ *                 v_status: "Submitted"
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Manager not found with entrauserid: aabbccdd-1234-5678-abcd-ef1234567890"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
  
 /**
  * @swagger
