@@ -106,10 +106,11 @@ const create_Ticket = async (req, res) => {
             ]
         );
  
-        const ticketuuid = result.rows[0].ticket_create;
+        const { ticketuuid, ticketnumber } = result.rows[0];
  
         return res.status(201).json({
             ticketuuid,
+            ticketnumber,
         });
  
     } catch (err) {

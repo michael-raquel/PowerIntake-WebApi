@@ -273,6 +273,22 @@ const get_UserAppRoleAssignments = async (req, res) => {
   }
 };
 
+const get_UserFromDb = async (req, res) => {
+  try {
+    const { useruuid, entrauserid, tenantuuid } = req.query;
+
+    const result = await client.query(
+      "SELECT * FROM user_get($1, $2, $3)",
+      [useruuid || null, entrauserid || null, tenantuuid || null]
+    );
+
+    return res.status(200).json(result.rows);
+
+  } catch (err) {
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 const sync_Users = async (req, res) => {
   try {
     const token = await getAccessToken();
@@ -549,6 +565,7 @@ module.exports = {
   get_AllUsersWithDetails,
   get_UserGroups,
   get_UserAppRoleAssignments,
+  get_UserFromDb,
   sync_Users,
   sync_AllTenantUsers,
 };

@@ -278,11 +278,12 @@
  *             createdby: "aabbccdd-1234-5678-abcd-ef1234567890"
  *     responses:
  *       201:
- *         description: Successfully created, returns new ticket UUID
+ *         description: Successfully created, returns new ticket UUID and ticket number
  *         content:
  *           application/json:
  *             example:
  *               ticketuuid: "340a5679-ad90-4275-b082-7375698f08fb"
+ *               ticketnumber: "TKT20260316-0000001"
  *       400:
  *         description: Validation Error
  *         content:
