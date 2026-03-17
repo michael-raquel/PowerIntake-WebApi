@@ -374,7 +374,6 @@
  *             date: ["2026-01-05", "2026-01-06"]
  *             starttime: ["09:00", "13:00"]
  *             endtime: ["10:30", "14:00"]
- *             attachments: ["updated-log.txt", "new-screenshot.png"]
  *             modifiedby: "aabbccdd-1234-5678-abcd-ef1234567890"
  *     responses:
  *       200:
