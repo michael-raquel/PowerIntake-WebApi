@@ -369,6 +369,117 @@
 
 /**
  * @swagger
+ * /manageusers/myclients:
+ *   get:
+ *     summary: Get paginated list of clients
+ *     description: Returns a paginated list of users grouped by tenant with filtering by search, tenant name, and status.
+ *     tags:
+ *       - Manage Users
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         required: false
+ *         description: Page number to retrieve
+ *         example: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 12
+ *         required: false
+ *         description: Number of records per page
+ *         example: 12
+ *       - in: query
+ *         name: tenantname
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: Filter by tenant name
+ *         example: Sparta
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: Search by username
+ *         example: Ramric
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *         required: false
+ *         description: Filter by status (true = active, false = inactive)
+ *         example: true
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved paginated clients
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       v_tenantid:
+ *                         type: string
+ *                         example: 1159156a-3971-429d-bb02-bd37b1223d24
+ *                       v_tenantname:
+ *                         type: string
+ *                         example: SpartaServ
+ *                       v_username:
+ *                         type: string
+ *                         example: Ramric Cardinal
+ *                       v_totalticket:
+ *                         type: integer
+ *                         example: 7
+ *                       v_openticket:
+ *                         type: integer
+ *                         example: 3
+ *                       v_status:
+ *                         type: string
+ *                         example: true
+ *                       total_count:
+ *                         type: integer
+ *                         example: 100
+ *                 total:
+ *                   type: integer
+ *                   example: 100
+ *                 page:
+ *                   type: integer
+ *                   example: 1
+ *                 limit:
+ *                   type: integer
+ *                   example: 12
+ *                 totalPages:
+ *                   type: integer
+ *                   example: 9
+ *                 hasNext:
+ *                   type: boolean
+ *                   example: true
+ *                 hasPrev:
+ *                   type: boolean
+ *                   example: false
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: Internal Server Error
+ */
+
+/**
+ * @swagger
  * /manageusers/managercheck:
  *   get:
  *     summary: Check if a user is a manager

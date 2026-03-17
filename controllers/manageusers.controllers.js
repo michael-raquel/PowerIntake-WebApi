@@ -110,6 +110,40 @@ const get_user_super_admin = async (req, res) => {
   }
 };
 
+
+const get_user_my_clients = async (req, res) => {
+  try {
+    const page       = req.query.page       || '1';
+    const limit      = req.query.limit      || '12';
+    const search     = req.query.search     || null;
+    const tenantname = req.query.tenantname || null;
+    const status     = req.query.status     || null;
+
+    const result = await client.query(
+      'SELECT * FROM public.user_get_my_clients($1,$2,$3,$4,$5)',
+      [page, limit, search, tenantname, status]
+    );
+
+    const rows       = result.rows;
+    const total      = rows.length > 0 ? parseInt(rows[0].total_count) : 0;
+    const totalPages = Math.ceil(total / parseInt(limit));
+
+    return res.status(200).json({
+      data: rows,
+      total,
+      page:       parseInt(page),
+      limit:      parseInt(limit),
+      totalPages,
+      hasNext: parseInt(page) < totalPages,
+      hasPrev: parseInt(page) > 1
+    });
+
+  } catch (err) {
+    console.error('get_my_clients error:', err.message);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
 const manager_check = async (req, res) => {
     try {
 
@@ -125,12 +159,13 @@ const manager_check = async (req, res) => {
 
         res.status(500).json({ error: "Internal Server Error" });
     }
-}
+};
 
 
 module.exports = {
   get_user_from_my_company,
   get_user_from_my_team,
   get_user_super_admin,
+  get_user_my_clients,
   manager_check,
 };
