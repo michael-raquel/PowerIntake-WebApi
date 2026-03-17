@@ -407,3 +407,72 @@
  *             example:
  *               error: "Internal Server Error"
  */
+
+/**
+ * @swagger
+ * /tickets/dynamics:
+ *   get:
+ *     summary: Get tickets from Microsoft Dynamics 365 by date range
+ *     tags: [Dynamics Tickets]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: startDate
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: "2026-03-10"
+ *         description: Start date for filtering tickets (YYYY-MM-DD)
+ *       - in: query
+ *         name: endDate
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: "2026-03-17"
+ *         description: End date for filtering tickets (YYYY-MM-DD)
+ *       - in: query
+ *         name: status
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           example: 0
+ *         description: |
+ *           Optional ticket status filter  
+ *           0 = Active  
+ *           1 = Resolved  
+ *           2 = Canceled
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved tickets from Dynamics
+ *         content:
+ *           application/json:
+ *             example:
+ *               - ticketid: "401b6fb2-2b92-f011-b4cc-000d3a332b4b"
+ *                 title: "Server Issue"
+ *                 createdon: "2026-03-15T08:30:00Z"
+ *                 statuscode: 1
+ *               - ticketid: "512c7aa3-3c12-f011-b4cc-000d3a332b4b"
+ *                 title: "Login Error"
+ *                 createdon: "2026-03-16T10:15:00Z"
+ *                 statuscode: 0
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             examples:
+ *               missingParams:
+ *                 summary: Missing required parameters
+ *                 value:
+ *                   error: "startDate and endDate are required"
+ *               invalidFormat:
+ *                 summary: Invalid date format
+ *                 value:
+ *                   error: "Invalid date format. Use YYYY-MM-DD."
+ *       500:
+ *         description: Failed to fetch tickets from Dynamics
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Failed to fetch tickets from Dynamics"
+ */

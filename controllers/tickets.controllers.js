@@ -190,12 +190,85 @@ const update_Ticket = async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 };
- 
+
+ const getDynamicsToken = async () => {
+    try {
+        require("dotenv").config();
+
+        const params = new URLSearchParams();
+        params.append("grant_type", "client_credentials");
+        params.append("client_id", process.env.AZURE_CLIENT_ID);
+        params.append("client_secret", process.env.AZURE_CLIENT_SECRET);
+        params.append("scope", `${process.env.DYNAMICS_URL}/.default`);
+
+        const response = await axios.post(
+            `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID}/oauth2/v2.0/token`,
+            params.toString(),
+            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+        );
+
+        // console.log("TOKEN RECEIVED:", response.data.access_token.slice(0, 20) + "..."); 
+        return response.data.access_token;
+
+    } catch (err) {
+        // console.error("TOKEN ERROR:", err.response?.data || err.message);
+        throw new Error("Failed to get Dynamics token");
+    }
+};
+
+const get_DynamicsTickets = async (req, res) => {
+    try {
+        const { startDate, endDate, status } = req.query;
+
+        if (!startDate || !endDate) {
+            return res.status(400).json({ error: "startDate and endDate are required" });
+        }
+
+        const token = await getDynamicsToken();
+
+        const start = `${startDate}T00:00:00Z`;
+        const end = `${endDate}T23:59:59Z`;
+
+        let filter = `createdon ge ${start} and createdon le ${end}`;
+        if (status !== undefined) {
+            filter += ` and statecode eq ${parseInt(status, 10)}`;
+        }
+
+        const filterEncoded = encodeURIComponent(filter);
+
+        const response = await axios.get(
+            `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=incidentid,ticketnumber,title,description,prioritycode,ownerid,createdon,statecode&$filter=${filterEncoded}`,
+            {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: "application/json",
+                    "OData-Version": "4.0",
+                    "OData-MaxVersion": "4.0"
+                }
+            }
+        );
+
+        const ticketcount = response.data.value.length;
+        
+        return res.status(200).json({ tickets: response.data.value, count: ticketcount });
+
+    } catch (err) {
+        // console.error("DYNAMICS ERROR:", err.response?.data || err.message);
+        return res.status(500).json({
+            error: "Failed to fetch tickets from Dynamics",
+            details: err.response?.data || err.message
+        });
+    }
+};
+
+
 module.exports = {
     create_Ticket,
     get_Ticket,
     update_Ticket,
     get_Ticket_Status,
     get_ManagerTeamTickets,
-    get_ManagerTickets
+    get_ManagerTickets,
+    getDynamicsToken,
+    get_DynamicsTickets
 };

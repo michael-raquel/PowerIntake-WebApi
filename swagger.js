@@ -5,7 +5,7 @@ const swaggerUi = require("swagger-ui-express");
 const options = {
   definition: {
     openapi: "3.0.0",
-    info: { title: "Servana IT Web API", version: "1.0.0" },
+    info: { title: "Power Intake API", version: "1.0.0" },
     servers: [
       // { url: process.env.API_BASE_URL || `http://localhost:${process.env.PORT}` }
       { url: `http://localhost:${process.env.PORT}` }

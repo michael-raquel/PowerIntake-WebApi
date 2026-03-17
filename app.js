@@ -34,9 +34,6 @@ app.use('/roles', roles);
 const images = require("./routes/images.routes");
 app.use("/images", images);
 
-const systemadmin = require("./routes/systemadmin.routes");
-app.use("/systemadmin", systemadmin);
-
 const users = require("./routes/users.routes");
 app.use("/users", users);
 
