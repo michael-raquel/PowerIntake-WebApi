@@ -71,6 +71,30 @@ const get_ManagerTeamTickets = async (req, res) => {
   }
 };
 
+const get_ManagerTickets = async (req, res) => {
+    try {
+        const { managerentrauserid, status } = req.query;
+
+        if (!managerentrauserid) {
+            return res.status(400).json({ error: "managerentrauserid is required" });
+        }
+
+        const result = await client.query(
+            "SELECT * FROM ticket_manager_get($1, $2)",
+            [managerentrauserid, status || null]
+        );
+
+        return res.status(200).json(result.rows);
+
+    } catch (err) {
+        if (err.message) {
+            return res.status(400).json({ error: err.message });
+        }
+
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
 const create_Ticket = async (req, res) => {
     try {
         const {
@@ -106,10 +130,11 @@ const create_Ticket = async (req, res) => {
             ]
         );
  
-        const ticketuuid = result.rows[0].ticket_create;
+        const { ticketuuid, ticketnumber } = result.rows[0];
  
         return res.status(201).json({
             ticketuuid,
+            ticketnumber,
         });
  
     } catch (err) {
@@ -171,5 +196,6 @@ module.exports = {
     get_Ticket,
     update_Ticket,
     get_Ticket_Status,
-    get_ManagerTeamTickets
+    get_ManagerTeamTickets,
+    get_ManagerTickets
 };

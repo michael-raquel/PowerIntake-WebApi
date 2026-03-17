@@ -28,6 +28,9 @@ app.use(cors({
 app.use(express.json());  
 setupSwagger(app);        
 
+const roles = require('./routes/roles.routes');
+app.use('/roles', roles);
+
 const images = require("./routes/images.routes");
 app.use("/images", images);
 
@@ -36,6 +39,9 @@ app.use("/systemadmin", systemadmin);
 
 const users = require("./routes/users.routes");
 app.use("/users", users);
+
+const manageusers = require("./routes/manageusers.routes");
+app.use("/manageusers", manageusers);
 
 const groups = require('./routes/groups.routes');
 app.use('/groups', groups);
