@@ -32,6 +32,63 @@
 
 /**
  * @swagger
+ * /users/db:
+ *   get:
+ *     summary: Get users from the database
+ *     tags: [Users]
+ *     parameters:
+ *       - in: query
+ *         name: useruuid
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Filter by user UUID
+ *         example: "340a5679-ad90-4275-b082-7375698f08fb"
+ *       - in: query
+ *         name: entrauserid
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Filter by Entra user ID
+ *         example: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *       - in: query
+ *         name: tenantuuid
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Filter by tenant UUID
+ *         example: "1159156a-3971-429d-bb02-bd37b1223d24"
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved users
+ *         content:
+ *           application/json:
+ *             example:
+ *               - v_userid: 1
+ *                 v_useruuid: "340a5679-ad90-4275-b082-7375698f08fb"
+ *                 v_entratenantid: "1159156a-3971-429d-bb02-bd37b1223d24"
+ *                 v_tenantname: "Sparta Services LLC"
+ *                 v_entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *                 v_username: "Juan dela Cruz"
+ *                 v_userrole: "Employee"
+ *                 v_jobtitle: "Software Engineer"
+ *                 v_businessphone: "02-1234567"
+ *                 v_createddate: "2026-01-01T09:00:00Z"
+ *                 v_useremail: "juan@spartaservices.com"
+ *                 v_department: "Engineering"
+ *                 v_managerid: 2
+ *                 v_managername: "Maria Santos"
+ *                 v_mobilephone: "09123456789"
+ *                 v_createdat: "2026-01-01T09:00:00Z"
+ *                 v_createdby: "system"
+ *                 v_modifiedat: null
+ *                 v_modifiedby: null
+ *       500:
+ *         description: Internal Server Error
+ */
+
+/**
+ * @swagger
  * /users/profile:
  *   get:
  *     summary: Get a single user by ID
@@ -287,6 +344,121 @@
  *                   resourceId: "uuid-here"
  *                   resourceDisplayName: "powerintake"
  *                   principalId: "9e6f25b6-..."
+ *       504:
+ *         description: Timeout or Network Issue
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "No response from Microsoft Graph (Timeout or Network Issue)"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
+
+
+/**
+ * @swagger
+ * /users/sync:
+ *   post:
+ *     summary: Sync Microsoft Entra ID users to the database (My Company Only)
+ *     description: Fetches all users from Microsoft Graph API and upserts them into the database using email as the unique identifier. New users are inserted, existing users are updated. Users with no assigned role default to "User".
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Sync completed successfully
+ *         content:
+ *           application/json:
+ *             examples:
+ *               success:
+ *                 summary: Sync with new users
+ *                 value:
+ *                   message: "Sync completed."
+ *                   total: 149
+ *                   new: 10
+ *                   synced: 9
+ *                   skipped: 1
+ *                   managersResolved: 8
+ *                   managersFailed: 1
+ *               alreadySynced:
+ *                 summary: All users already synced
+ *                 value:
+ *                   message: "All users are already synced."
+ *                   total: 149
+ *                   synced: 0
+ *                   skipped: 149
+ *               noUsers:
+ *                 summary: No users found in Graph
+ *                 value:
+ *                   message: "No users found in Microsoft Graph."
+ *                   synced: 0
+ *       504:
+ *         description: Timeout or Network Issue
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "No response from Microsoft Graph (Timeout or Network Issue)"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
+
+/**
+ * @swagger
+ * /users/sync-all-tenants:
+ *   post:
+ *     summary: Sync Microsoft Entra ID users across all configured tenants
+ *     description: Fetches all tenants from the database, authenticates against each tenant using their stored credentials, then syncs all users into the database. Only new users are inserted. Skips tenants with no credentials configured.
+ *     tags: [Users]
+ *     responses:
+ *       200:
+ *         description: Multi-tenant sync completed
+ *         content:
+ *           application/json:
+ *             examples:
+ *               success:
+ *                 summary: Sync with results across tenants
+ *                 value:
+ *                   message: "Multi-tenant sync completed."
+ *                   total_tenants: 3
+ *                   results:
+ *                     - tenant: "Housing Co A"
+ *                       total: 50
+ *                       new: 5
+ *                       synced: 5
+ *                       skipped: 0
+ *                     - tenant: "Housing Co B"
+ *                       total: 30
+ *                       new: 0
+ *                       message: "All users already synced."
+ *                     - tenant: "Housing Co C"
+ *                       total: 20
+ *                       message: "No users found."
+ *                       synced: 0
+ *               noTenants:
+ *                 summary: No tenants configured
+ *                 value:
+ *                   message: "No tenants configured with credentials."
+ *               tenantError:
+ *                 summary: One tenant failed but others succeeded
+ *                 value:
+ *                   message: "Multi-tenant sync completed."
+ *                   total_tenants: 3
+ *                   results:
+ *                     - tenant: "Housing Co A"
+ *                       total: 50
+ *                       new: 5
+ *                       synced: 5
+ *                       skipped: 0
+ *                     - tenant: "Housing Co B"
+ *                       error: "Invalid client secret"
  *       504:
  *         description: Timeout or Network Issue
  *         content:
