@@ -158,14 +158,13 @@ const update_Ticket = async (req, res) => {
             date,
             starttime,
             endtime,
-            attachments,
             modifiedby,
         } = req.body;
  
         const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
  
         const result = await client.query(
-            "SELECT * FROM ticket_update($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            "SELECT * FROM ticket_update($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             [
                 ticketuuid,
                 title,
@@ -175,7 +174,6 @@ const update_Ticket = async (req, res) => {
                 toArray(date),
                 toArray(starttime),
                 toArray(endtime),
-                toArray(attachments),
                 modifiedby
             ]
         );
