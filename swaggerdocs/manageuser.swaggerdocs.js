@@ -3,7 +3,7 @@
  * /manageusers/mycompany:
  *   get:
  *     summary: Get paginated list of users in my company
- *     description: Returns a paginated list of users with their manager, role, department, total tickets, open tickets, and status.
+ *     description: Returns a paginated list of users filtered by tenant, with manager, role, department, tickets, and status.
  *     tags:
  *       - Manage Users
  *     parameters:
@@ -19,10 +19,53 @@
  *         name: limit
  *         schema:
  *           type: integer
- *           default: 10
+ *           default: 12
  *         required: false
  *         description: Number of records per page
- *         example: 10
+ *         example: 12
+ *       - in: query
+ *         name: entratenantid
+ *         schema:
+ *           type: string
+ *         required: true
+ *         description: Entra Tenant ID to filter users by company
+ *         example: 1159156a-3971-429d-bb02-bd37b1223d24
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: Search by username
+ *         example: Ramric
+ *       - in: query
+ *         name: manager
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: Filter by manager name
+ *         example: John Smith
+ *       - in: query
+ *         name: role
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: Filter by role
+ *         example: User
+ *       - in: query
+ *         name: department
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: Filter by department
+ *         example: Engineering
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *         required: false
+ *         description: Filter by status (true = active, false = inactive)
+ *         example: true
  *     responses:
  *       200:
  *         description: Successfully retrieved paginated users
@@ -56,34 +99,38 @@
  *                         example: 3
  *                       v_status:
  *                         type: string
- *                         example: Active
+ *                         example: true
  *                       total_count:
  *                         type: integer
  *                         example: 100
  *                 total:
  *                   type: integer
- *                   description: Total number of records
  *                   example: 100
  *                 page:
  *                   type: integer
- *                   description: Current page number
  *                   example: 1
  *                 limit:
  *                   type: integer
- *                   description: Number of records per page
- *                   example: 10
+ *                   example: 12
  *                 totalPages:
  *                   type: integer
- *                   description: Total number of pages
- *                   example: 10
+ *                   example: 9
  *                 hasNext:
  *                   type: boolean
- *                   description: Whether there is a next page
  *                   example: true
  *                 hasPrev:
  *                   type: boolean
- *                   description: Whether there is a previous page
  *                   example: false
+ *       400:
+ *         description: Missing required parameter
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: entratenantid is required
  *       500:
  *         description: Internal server error
  *         content:
@@ -194,6 +241,120 @@
  *                 error:
  *                   type: string
  *                   example: entrauserid is required
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: Internal Server Error
+ */
+
+/**
+ * @swagger
+ * /manageusers/superadmin:
+ *   get:
+ *     summary: Get paginated list of all users (Super Admin view)
+ *     description: Returns a paginated list of all users across all tenants with filtering by search, role, and status.
+ *     tags:
+ *       - Manage Users
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         required: false
+ *         description: Page number to retrieve
+ *         example: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 12
+ *         required: false
+ *         description: Number of records per page
+ *         example: 12
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: Search by username
+ *         example: Ramric
+ *       - in: query
+ *         name: role
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: Filter by role
+ *         example: SuperAdmin
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *         required: false
+ *         description: Filter by status (true = active, false = inactive)
+ *         example: true
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved paginated users
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       v_managername:
+ *                         type: string
+ *                         example: John Smith
+ *                       v_username:
+ *                         type: string
+ *                         example: Jane Doe
+ *                       v_role:
+ *                         type: string
+ *                         example: SuperAdmin
+ *                       v_department:
+ *                         type: string
+ *                         example: Engineering
+ *                       v_totalticket:
+ *                         type: integer
+ *                         example: 7
+ *                       v_openticket:
+ *                         type: integer
+ *                         example: 3
+ *                       v_status:
+ *                         type: string
+ *                         example: true
+ *                       total_count:
+ *                         type: integer
+ *                         example: 100
+ *                 total:
+ *                   type: integer
+ *                   example: 100
+ *                 page:
+ *                   type: integer
+ *                   example: 1
+ *                 limit:
+ *                   type: integer
+ *                   example: 12
+ *                 totalPages:
+ *                   type: integer
+ *                   example: 9
+ *                 hasNext:
+ *                   type: boolean
+ *                   example: true
+ *                 hasPrev:
+ *                   type: boolean
+ *                   example: false
  *       500:
  *         description: Internal server error
  *         content:

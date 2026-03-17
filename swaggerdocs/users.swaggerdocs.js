@@ -364,8 +364,10 @@
  * /users/sync:
  *   post:
  *     summary: Sync Microsoft Entra ID users to the database (My Company Only)
- *     description: Fetches all users from Microsoft Graph API and upserts them into the database using email as the unique identifier. New users are inserted, existing users are updated.
+ *     description: Fetches all users from Microsoft Graph API and upserts them into the database using email as the unique identifier. New users are inserted, existing users are updated. Users with no assigned role default to "User".
  *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Sync completed successfully
@@ -373,12 +375,22 @@
  *           application/json:
  *             examples:
  *               success:
- *                 summary: Sync with results
+ *                 summary: Sync with new users
  *                 value:
  *                   message: "Sync completed."
- *                   total: 42
- *                   synced: 40
- *                   skipped: 2
+ *                   total: 149
+ *                   new: 10
+ *                   synced: 9
+ *                   skipped: 1
+ *                   managersResolved: 8
+ *                   managersFailed: 1
+ *               alreadySynced:
+ *                 summary: All users already synced
+ *                 value:
+ *                   message: "All users are already synced."
+ *                   total: 149
+ *                   synced: 0
+ *                   skipped: 149
  *               noUsers:
  *                 summary: No users found in Graph
  *                 value:

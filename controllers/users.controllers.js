@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { getAccessToken } = require('../config/authService');
+const { resolveRoleName } = require('../config/groupRoleMap');
 const client = require("../config/db");
 
 const GRAPH_URL = 'https://graph.microsoft.com/v1.0';
@@ -311,13 +312,11 @@ const sync_Users = async (req, res) => {
       return res.status(200).json({ message: "No users found in Microsoft Graph.", synced: 0 });
     }
 
-    const existingResult = await client.query("SELECT * FROM public.user_email_get()");
-    const existingEmails  = new Set(existingResult.rows.map((r) => r.v_useremail));
+    const existingResult = await client.query("SELECT * FROM public.user_entraid_get()");
+    const existingEntraIds = new Set(existingResult.rows.map((r) => r.v_entrauserid));
 
     const newUsers = graphUsers.filter((user) => {
-      const email = user.mail ?? user.userPrincipalName ?? null;
-      if (!email) return false;
-      return !existingEmails.has(email.toLowerCase());
+      return !existingEntraIds.has(user.id);
     });
 
     if (newUsers.length === 0) {
@@ -329,6 +328,24 @@ const sync_Users = async (req, res) => {
       });
     }
 
+    const roleMap = {};
+    await Promise.allSettled(
+      newUsers.map(async (user) => {
+        try {
+          const roleRes = await axios.get(
+            `${GRAPH_URL}/users/${user.id}/appRoleAssignments`,
+            { headers }
+          );
+          const roles = roleRes.data.value
+            .map(r => resolveRoleName(r.appRoleId))
+            .filter(Boolean);
+          if (roles.length > 0) {
+            roleMap[user.id] = roles[0];
+          }
+        } catch {}
+      })
+    );
+
     let synced  = 0;
     let skipped = 0;
 
@@ -338,7 +355,7 @@ const sync_Users = async (req, res) => {
 
       try {
         await client.query(
-          "SELECT public.user_sync($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+          "SELECT public.user_sync($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
           [
             user.id,
             entraTenantId,
@@ -351,6 +368,8 @@ const sync_Users = async (req, res) => {
             user.createdDateTime     ?? null,
             tenantName,
             tenantEmailDomain,
+            roleMap[user.id]         ?? "User",
+            user.accountEnabled      ?? true,
           ]
         );
         synced++;
@@ -361,21 +380,16 @@ const sync_Users = async (req, res) => {
     }
 
     const managerPairs = [];
-
     await Promise.allSettled(
+      // newGraphUsers.map(async (user) => {
       newUsers.map(async (user) => {
         try {
           const managerRes = await axios.get(`${GRAPH_URL}/users/${user.id}/manager`, { headers });
           const managerEntraId = managerRes.data?.id ?? null;
           if (managerEntraId) {
-            managerPairs.push({
-              userEntraId: user.id,
-              managerEntraId,
-            });
+            managerPairs.push({ userEntraId: user.id, managerEntraId });
           }
-        } catch {
-         
-        }
+        } catch {}
       })
     );
 
@@ -390,7 +404,6 @@ const sync_Users = async (req, res) => {
         );
         managersResolved++;
       } catch (err) {
-        console.error(`Failed to set manager for ${pair.userEntraId}:`, err.message);
         managersFailed++;
       }
     }
