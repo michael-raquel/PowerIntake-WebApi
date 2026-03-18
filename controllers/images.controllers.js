@@ -87,8 +87,41 @@ const delete_Image = async (req, res) => {
   }
 };
 
+
+const download_Image = async (req, res) => {
+  try {
+    const { blobName } = req.params;
+    const decodedBlobName = decodeURIComponent(blobName);
+    
+    const blobServiceClient = BlobServiceClient.fromConnectionString(CONNECTION_STRING);
+    const containerClient = blobServiceClient.getContainerClient(CONTAINER_NAME);
+    const blockBlobClient = containerClient.getBlockBlobClient(decodedBlobName);
+    
+    const exists = await blockBlobClient.exists();
+    if (!exists) {
+      return res.status(404).json({ error: "File not found" });
+    }
+    
+    const properties = await blockBlobClient.getProperties();
+    const contentType = properties.contentType || 'application/octet-stream';
+    
+    const downloadResponse = await blockBlobClient.download(0);
+    
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(decodedBlobName)}"`);
+    res.setHeader('Content-Length', properties.contentLength);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    
+    downloadResponse.readableStreamBody.pipe(res);
+  } catch (err) {
+    console.error("download_Image error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+};
+
 module.exports = {
   upload,
   upload_Image,
   delete_Image,
+  download_Image,
 };
