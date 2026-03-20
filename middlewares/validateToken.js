@@ -29,16 +29,18 @@ const validateToken = (req, res, next) => {
   const decoded = jwt.decode(token, { complete: true });
 
   if (!decoded?.payload?.tid) {
-    return res.status(401).json({ error: "Unauthorized: Invalid token structure" });
+    return res
+      .status(401)
+      .json({ error: "Unauthorized: Invalid token structure" });
   }
 
-  const tenantId = decoded.payload.tid; 
+  const tenantId = decoded.payload.tid;
 
   jwt.verify(
     token,
     (header, callback) => getKey(header, tenantId, callback),
     {
-      audience: process.env.AZURE_CLIENT_ID,
+      audience: process.env.AZURE_API_AUDIENCE,
       issuer: `https://login.microsoftonline.com/${tenantId}/v2.0`,
       algorithms: ["RS256"],
     },
@@ -48,9 +50,9 @@ const validateToken = (req, res, next) => {
         return res.status(401).json({ error: "Unauthorized: Invalid token" });
       }
       req.user = decodedToken;
-      req.tenantId = tenantId; 
+      req.tenantId = tenantId;
       next();
-    }
+    },
   );
 };
 
