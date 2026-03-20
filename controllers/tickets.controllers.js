@@ -356,11 +356,22 @@ const create_Ticket = async (req, res) => {
     };
 
 const syncToDynamics = async ({
-    token, ticketuuid, dynamicsAccountId,
-    userInfo, 
+   token, ticketuuid, dynamicsAccountId,
+    userInfo,
     title, description, usertimezone,
     date, starttime, endtime, contactid,
 }) => {
+    try {
+        const decoded = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+        console.log("Token tid:",   decoded.tid);
+        console.log("Token appid:", decoded.appid);
+        console.log("Token roles:", decoded.roles);
+    } catch (e) {
+        console.log("Could not decode token:", e.message);
+    }
+    console.log("dynamicsAccountId:", dynamicsAccountId);
+    console.log("userInfo:",          userInfo);
+
     const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
 
     const dynamicsPayload = {
