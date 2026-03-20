@@ -1,8 +1,6 @@
 
 //auragrabe
 
-
-
 const express = require('express');
 const dotenv = require('dotenv');
 dotenv.config();
@@ -57,10 +55,14 @@ app.use("/attachments", attachments);
 const notes = require("./routes/notes.routes");
 app.use("/notes", notes);
 
+
+
 const PORT = process.env.PORT;
 
 app.listen(PORT, () => {
   console.log(`Server is running on port http://localhost:${PORT}`);
+
+  require('./controllers/scheduler');
 });
 
 module.exports = app;
