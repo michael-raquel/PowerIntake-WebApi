@@ -315,18 +315,21 @@ const sync_Users = async (req, res) => {
     const existingResult = await client.query("SELECT * FROM public.user_entraid_get()");
     const existingEntraIds = new Set(existingResult.rows.map((r) => r.v_entrauserid));
 
-    const newUsers = graphUsers.filter((user) => {
-      return !existingEntraIds.has(user.id);
-    });
+    const newUsers = graphUsers;
+    // .filter((user) => {
+    //   return !existingEntraIds.has(user.id);
+    // });
 
-    if (newUsers.length === 0) {
-      return res.status(200).json({
-        message: "All users are already synced.",
-        total: graphUsers.length,
-        synced: 0,
-        skipped: graphUsers.length,
-      });
-    }
+    // if (newUsers.length === 0) {
+    //   return res.status(200).json({
+    //     message: "All users are already synced.",
+    //     total: graphUsers.length,
+    //     synced: 0,
+    //     skipped: graphUsers.length,
+    //   });
+    // }
+
+    const ROLE_PRIORITY = ["SuperAdmin", "Admin", "Manager", "User"];
 
     const roleMap = {};
     await Promise.allSettled(
@@ -339,10 +342,15 @@ const sync_Users = async (req, res) => {
           const roles = roleRes.data.value
             .map(r => resolveRoleName(r.appRoleId))
             .filter(Boolean);
-          if (roles.length > 0) {
-            roleMap[user.id] = roles[0];
-          }
-        } catch {}
+
+         roleMap[user.id] = roles.length > 0
+        ? roles.sort((a, b) => ROLE_PRIORITY.indexOf(a) - ROLE_PRIORITY.indexOf(b))[0]
+        : "User";
+
+        } catch (err) {
+          console.error(`Failed to fetch roles for ${user.id}:`, err.message);
+          roleMap[user.id] = "User"; 
+        }
       })
     );
 
@@ -368,7 +376,8 @@ const sync_Users = async (req, res) => {
             user.createdDateTime     ?? null,
             tenantName,
             tenantEmailDomain,
-            roleMap[user.id]         ?? "User",
+            roleMap[user.id]         ?? null,
+            // user.id        ?? "User",
             user.accountEnabled      ?? true,
           ]
         );

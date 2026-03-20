@@ -485,11 +485,14 @@ const getUserGroupsByAppRole = async (req, res) => {
 
 const getAppRolesWithGroupsByClientId = async (req, res) => {
   try {
-    const { clientId } = req.params || {};
 
-    if (!clientId) {
-      return res.status(400).json({ error: "clientId is required" });
-    }
+    // const { clientId } = req.params || {};
+
+    // if (!clientId) {
+    //   return res.status(400).json({ error: "clientId is required" });
+    // }
+    let { clientId } = req.params || {};
+    clientId = clientId || "6ccf8b01-7af5-497b-9e23-45a92d68a226";
 
     const token = await getAccessToken();
 

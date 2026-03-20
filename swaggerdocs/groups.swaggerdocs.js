@@ -424,7 +424,7 @@
  *         schema:
  *           type: string
  *         description: The application (client) ID of the app registration.
- *         example: "00000000-1111-2222-3333-444444444444"
+ *         example: "6ccf8b01-7af5-497b-9e23-45a92d68a226"
  *     responses:
  *       200:
  *         description: Successfully retrieved app roles and their assigned groups
