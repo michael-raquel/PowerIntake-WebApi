@@ -15,16 +15,16 @@ const {
   getAppRolesWithGroupsByClientId,
 } = require("../controllers/groups.controllers");
 
-router.get("/", get_AllGroups);
-router.get("/find", get_GroupById);
-router.get("/members", get_GroupMembers);
-router.get("/owners", get_GroupOwners);
-router.get("/profile", get_GroupFullProfile);
-router.get("/with-members", get_AllGroupsWithMembers);
+router.get("/", validateToken, get_AllGroups);
+router.get("/find", validateToken, get_GroupById);
+router.get("/members", validateToken, get_GroupMembers);
+router.get("/owners", validateToken, get_GroupOwners);
+router.get("/profile", validateToken, get_GroupFullProfile);
+router.get("/with-members", validateToken, get_AllGroupsWithMembers);
 router.post("/assign", validateToken, assign_UserToGroup);
 router.delete("/unassign", validateToken, unassign_UserFromGroup);
-router.get("/app-roles/:appId", getAppRolesByAppRegistration);
-router.get("/user-groups/:userOid/:clientId", getUserGroupsByAppRole);
-router.get("/app-roles-with-groups/:clientId", getAppRolesWithGroupsByClientId);
+router.get("/app-roles/:appId", validateToken, getAppRolesByAppRegistration);
+router.get("/user-groups/:userOid/:clientId", validateToken, getUserGroupsByAppRole);
+router.get("/app-roles-with-groups/:clientId", validateToken, getAppRolesWithGroupsByClientId);
 
 module.exports = router;
