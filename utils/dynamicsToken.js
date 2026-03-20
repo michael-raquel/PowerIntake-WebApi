@@ -1,3 +1,6 @@
+const axios = require("axios");        
+const tokenCache = {};                
+
 const getDynamicsToken = async () => {
     const tenantId = process.env.AZURE_TENANT_ID;
     const cached   = tokenCache[tenantId];
@@ -26,3 +29,5 @@ const getDynamicsToken = async () => {
     console.log(`Dynamics token refreshed for tenant: ${tenantId}`);
     return tokenCache[tenantId].token;
 };
+
+module.exports = { getDynamicsToken };
