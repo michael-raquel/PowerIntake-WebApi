@@ -356,22 +356,11 @@ const create_Ticket = async (req, res) => {
     };
 
 const syncToDynamics = async ({
-   token, ticketuuid, dynamicsAccountId,
-    userInfo,
+    token, ticketuuid, dynamicsAccountId,
+    userInfo, 
     title, description, usertimezone,
     date, starttime, endtime, contactid,
 }) => {
-    try {
-        const decoded = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
-        console.log("Token tid:",   decoded.tid);
-        console.log("Token appid:", decoded.appid);
-        console.log("Token roles:", decoded.roles);
-    } catch (e) {
-        console.log("Could not decode token:", e.message);
-    }
-    console.log("dynamicsAccountId:", dynamicsAccountId);
-    console.log("userInfo:",          userInfo);
-
     const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
 
     const dynamicsPayload = {
@@ -699,19 +688,18 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
         const isCronSync = !startDate;
 
         const now   = new Date();
-        const start = startDate
-            ? new Date(startDate).toISOString()
-            : (() => {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-                return today.toISOString();
-            })();
+        // const start = startDate
+        //     ? new Date(startDate).toISOString()
+        //     : (() => {
+        //         const today = new Date();
+        //         today.setHours(0, 0, 0, 0);
+        //         return today.toISOString();
+        //     })();
 
-        const end = now.toISOString();
+        // const end = now.toISOString();
 
-        const filter = isCronSync
-            ? `modifiedon ge ${start} and modifiedon le ${end}`
-            : `createdon ge ${start} and createdon le ${end}`;
+        // const filter = `createdon ge 2026-01-01T00:00:00Z`;
+        const filter = `modifiedon eq ${startDate}`;
 
         console.log(`[SYNC] Mode: ${isCronSync ? 'CRON (modifiedon today)' : 'MANUAL (createdon from ' + startDate + ')'}`);
 
