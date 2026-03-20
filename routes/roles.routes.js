@@ -6,16 +6,17 @@ const {
   delete_AppRoleAssignment,
   get_AppRoleAssignment,
 } = require('../controllers/roles.controllers');
+const validateToken = require('../middlewares/validateToken');
 
 // GET ?principalId=...&principalType=users|groups|servicePrincipals
-router.get('/app-role-assignments', get_AppRoleAssignments);
+router.get('/app-role-assignments', validateToken, get_AppRoleAssignments);
 
 // POST body: { principalId, resourceId, appRoleId, principalType? }
-router.post('/app-role-assignments', create_AppRoleAssignment);
+router.post('/app-role-assignments', validateToken, create_AppRoleAssignment);
 
 // DELETE /roles/app-role-assignments/:principalId/:assignmentId?principalType=...
-router.delete('/app-role-assignments/:principalId/:assignmentId', delete_AppRoleAssignment);
+router.delete('/app-role-assignments/:principalId/:assignmentId', validateToken, delete_AppRoleAssignment);
 
-router.get('/app-role-assignment', get_AppRoleAssignment);
+router.get('/app-role-assignment', validateToken, get_AppRoleAssignment);
 
 module.exports = router;
