@@ -82,12 +82,13 @@ const get_user_super_admin = async (req, res) => {
     const page   = req.query.page   || '1';
     const limit  = req.query.limit  || '12';
     const search = req.query.search || null;
+    const clientname = req.query.clientname || null;
     const role   = req.query.role   || null;
     const status = req.query.status || null;
 
     const result = await client.query(
-      'SELECT * FROM public.user_get_super_admin($1,$2,$3,$4,$5)',
-      [page, limit, search, role, status]
+      'SELECT * FROM public.user_get_super_admin($1,$2,$3,$4,$5,$6)',
+      [page, limit, search, clientname, role, status]
     );
 
     const rows       = result.rows;
@@ -115,13 +116,11 @@ const get_user_my_clients = async (req, res) => {
   try {
     const page       = req.query.page       || '1';
     const limit      = req.query.limit      || '12';
-    const search     = req.query.search     || null;
     const tenantname = req.query.tenantname || null;
-    const status     = req.query.status     || null;
 
     const result = await client.query(
-      'SELECT * FROM public.user_get_my_clients($1,$2,$3,$4,$5)',
-      [page, limit, search, tenantname, status]
+      'SELECT * FROM public.user_get_my_clients($1,$2,$3)',
+      [page, limit, tenantname]
     );
 
     const rows       = result.rows;
@@ -129,13 +128,13 @@ const get_user_my_clients = async (req, res) => {
     const totalPages = Math.ceil(total / parseInt(limit));
 
     return res.status(200).json({
-      data: rows,
+      data:      rows,
       total,
-      page:       parseInt(page),
-      limit:      parseInt(limit),
+      page:      parseInt(page),
+      limit:     parseInt(limit),
       totalPages,
-      hasNext: parseInt(page) < totalPages,
-      hasPrev: parseInt(page) > 1
+      hasNext:   parseInt(page) < totalPages,
+      hasPrev:   parseInt(page) > 1,
     });
 
   } catch (err) {
