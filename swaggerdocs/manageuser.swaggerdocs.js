@@ -286,6 +286,13 @@
  *         description: Search by username
  *         example: Ramric
  *       - in: query
+ *         name: clientname
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: Filter by client name
+ *         example: Sparta
+ *       - in: query
  *         name: role
  *         schema:
  *           type: string
@@ -399,21 +406,6 @@
  *         required: false
  *         description: Filter by tenant name
  *         example: Sparta
- *       - in: query
- *         name: search
- *         schema:
- *           type: string
- *         required: false
- *         description: Search by username
- *         example: Ramric
- *       - in: query
- *         name: status
- *         schema:
- *           type: string
- *           enum: [true, false]
- *         required: false
- *         description: Filter by status (true = active, false = inactive)
- *         example: true
  *     responses:
  *       200:
  *         description: Successfully retrieved paginated clients

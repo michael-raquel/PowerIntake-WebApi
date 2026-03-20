@@ -412,7 +412,7 @@
  * /tickets/dynamics:
  *   get:
  *     summary: Get tickets from Microsoft Dynamics 365 by date range
- *     tags: [Dynamics Tickets]
+ *     tags: [Tickets]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -474,4 +474,180 @@
  *           application/json:
  *             example:
  *               error: "Failed to fetch tickets from Dynamics"
+ */
+
+/**
+ * @swagger
+ * /tickets/dynamics/{ticketnumber}:
+ *   get:
+ *     summary: Get a specific Dynamics ticket by ticket number
+ *     description: Fetches a single incident from Microsoft Dynamics 365 by its ticket number, including tenant, contact, and technician details.
+ *     tags:
+ *       - Tickets
+ *     parameters:
+ *       - in: path
+ *         name: ticketnumber
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: The ticket number
+ *         example: T20260313.0062
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved ticket
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 incidentid:
+ *                   type: string
+ *                   example: dadf657f-a422-f111-8341-00224804569c
+ *                 ticketnumber:
+ *                   type: string
+ *                   example: T20260313.0062
+ *                 title:
+ *                   type: string
+ *                   example: Server is down
+ *                 description:
+ *                   type: string
+ *                   example: Production server is not responding
+ *                 statecode:
+ *                   type: integer
+ *                   example: 0
+ *                 statuscode:
+ *                   type: integer
+ *                   example: 196780001
+ *                 caseorigincode:
+ *                   type: integer
+ *                   example: 2
+ *                 createdon:
+ *                   type: string
+ *                   example: 2026-03-13T13:06:09Z
+ *                 modifiedon:
+ *                   type: string
+ *                   example: 2026-03-13T13:14:41Z
+ *                 isescalated:
+ *                   type: boolean
+ *                   example: false
+ *                 ss_ticketstage:
+ *                   type: integer
+ *                   example: 7
+ *                 _customerid_value:
+ *                   type: string
+ *                   example: 7b42bea0-77af-ee11-a569-00224809c243
+ *                 _primarycontactid_value:
+ *                   type: string
+ *                   example: c2d66008-c058-f011-877b-6045bd027f5b
+ *                 _ss_assignedtechnician_value:
+ *                   type: string
+ *                   example: 5cc0af74-f321-f011-998a-6045bd027f5b
+ *                 tenantname:
+ *                   type: string
+ *                   example: Sparta Services
+ *                 tenantid:
+ *                   type: string
+ *                   example: 7b42bea0-77af-ee11-a569-00224809c243
+ *                 customername:
+ *                   type: string
+ *                   example: Jojo Mercado
+ *                 customerid:
+ *                   type: string
+ *                   example: c2d66008-c058-f011-877b-6045bd027f5b
+ *                 technicianname:
+ *                   type: string
+ *                   example: Ebenezer Emelogu
+ *                 ticketsource:
+ *                   type: string
+ *                   example: Email
+ *       400:
+ *         description: Missing incidentid parameter
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: incidentid is required
+ *       500:
+ *         description: Failed to fetch ticket from Dynamics
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: Failed to fetch ticket from Dynamics
+ *                 details:
+ *                   type: object
+ */
+
+/**
+ * @swagger
+ * /tickets/sync-dynamics:
+ *   post:
+ *     summary: Sync tickets from Microsoft Dynamics
+ *     description: >
+ *       Fetches all incidents from Dynamics CRM from March 1, 2026 to the current date.
+ *       Only syncs tickets where:
+ *         - `caseorigincode` is not null
+ *         - `ss_source` is one of: Phone, Email, Web, Chat, Power Intake
+ *       Inserts new tickets and updates existing ones based on `dynamicsincidentid`.
+ *       Also tracks status history in `ticketstatus` — only inserts a new row when the status changes.
+ *     tags:
+ *       - Tickets
+ *     responses:
+ *       200:
+ *         description: Sync completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: Dynamics ticket sync completed.
+ *                 total:
+ *                   type: integer
+ *                   description: Total tickets fetched from Dynamics
+ *                   example: 120
+ *                 filtered:
+ *                   type: integer
+ *                   description: Tickets that passed origin and source filters
+ *                   example: 95
+ *                 synced:
+ *                   type: integer
+ *                   description: Tickets successfully inserted or updated
+ *                   example: 90
+ *                 skipped:
+ *                   type: integer
+ *                   description: Tickets skipped due to missing tenant or errors
+ *                   example: 5
+ *                 errors:
+ *                   type: array
+ *                   description: List of tickets that failed to sync (only present if errors exist)
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       ticketnumber:
+ *                         type: string
+ *                         example: TKT20260301-0000001
+ *                       error:
+ *                         type: string
+ *                         example: insert or update on table violates foreign key constraint
+ *       500:
+ *         description: Failed to sync tickets from Dynamics
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: Failed to sync tickets from Dynamics
+ *                 details:
+ *                   type: string
+ *                   example: connect ECONNREFUSED
  */
