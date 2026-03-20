@@ -625,17 +625,17 @@ const db_loadUserMap = async () => {
 };
 
 const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
-    const statusCode   = ticket.statuscode ?? null;
-    const statusLabel  = DYNAMICS_STATUSCODE_MAP[statusCode]
-                      ?? ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]
-                      ?? null;
+    const statusCode  = ticket.statuscode ?? null;
+    const statusLabel = DYNAMICS_STATUSCODE_MAP[statusCode]
+                     ?? ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]
+                     ?? null;
 
     await client.query(
         `SELECT * FROM public.ticket_sync_dynamics(
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
             $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-            $31,$32,$33,$34,$35,$36
+            $31,$32,$33,$34,$35,$36,$37
         )`,
         [
             ticket.incidentid,
@@ -670,10 +670,11 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
             ticket["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]                           ?? null,
             ticket["ss_tickettype@OData.Community.Display.V1.FormattedValue"]                               ?? null,
             ticket["prioritycode@OData.Community.Display.V1.FormattedValue"]                                ?? null,
-            statusLabel,       
+            statusLabel,
             ticket.ss_quickfixflag                                                                          ?? null,
             ticket.ss_reason                                                                                ?? null,
             ticket.ss_completedonautotask                                                                   ?? null,
+            ticket.modifiedon                                                                               ?? null,  
         ]
     );
 };
@@ -681,11 +682,27 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
 const sync_DynamicsTickets_toDB = async (req, res) => {
     try {
         const token           = await getDynamicsToken();
-        const ALLOWED_SOURCES = [1, 2, 3, 4, 19];
+        const ALLOWED_SOURCES = [18, 2, 4, 17, 19];
 
-        const start  = "2026-01-01T00:00:00Z";
-        const end    = new Date().toISOString();
-        const filter = `createdon ge ${start} and createdon le ${end}`;
+        const startDate  = req.query?.startDate ?? req.body?.startDate ?? null;
+        const isCronSync = !startDate;
+
+        const now   = new Date();
+        const start = startDate
+            ? new Date(startDate).toISOString()
+            : (() => {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                return today.toISOString();
+            })();
+
+        const end = now.toISOString();
+
+        const filter = isCronSync
+            ? `modifiedon ge ${start} and modifiedon le ${end}`
+            : `createdon ge ${start} and createdon le ${end}`;
+
+        console.log(`[SYNC] Mode: ${isCronSync ? 'CRON (modifiedon today)' : 'MANUAL (createdon from ' + startDate + ')'}`);
 
         let allTickets = [];
         let nextLink   = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}&$top=1000`;
@@ -715,9 +732,6 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
 
         await db_batchUpsertTenants(buildAccountMap(filtered));
         const tenantMap = await db_loadTenantMap();
-
-        console.log("Tenant map keys:", Object.keys(tenantMap).slice(0, 3));
-        console.log("Sample ticket _customerid_value:", filtered[0]._customerid_value);
 
         await db_batchUpsertUsers(buildContactMap(filtered));
         const userMap = await db_loadUserMap();
