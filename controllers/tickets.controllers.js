@@ -5,7 +5,6 @@ const GRAPH_URL = "https://graph.microsoft.com/v1.0";
 const { getDynamicsToken } = require("../utils/dynamicsToken");
 const { cleanDescription, dynamicsHeaders, resolveTechnicianNames } = require("../utils/dynamicsHelpers");
 const { INCIDENT_SELECT_FIELDS, INCIDENT_EXPAND_FIELDS } = require("../utils/dynamicsFields");
-
 const { mapTicket } = require("../utils/dynamicsMapTicket");
 
 const get_Ticket = async (req, res) => {
@@ -100,48 +99,6 @@ const get_ManagerTickets = async (req, res) => {
     }
 };
  
-const update_Ticket = async (req, res) => {
-    try {
-        const {
-            ticketuuid,
-            title,
-            description,
-            usertimezone,
-            officelocation,
-            date,
-            starttime,
-            endtime,
-            modifiedby,
-        } = req.body;
- 
-        const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
- 
-        const result = await client.query(
-            "SELECT * FROM ticket_update($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            [
-                ticketuuid,
-                title,
-                description,
-                usertimezone,
-                officelocation,
-                toArray(date),
-                toArray(starttime),
-                toArray(endtime),
-                modifiedby
-            ]
-        );
- 
-        res.status(200).json(result.rows[0]);
-    } catch (err) {
- 
-        if (err.message) {
-            return res.status(400).json({ error: err.message });
-        }
- 
-        res.status(500).json({ error: "Internal Server Error" });
-    }
-};
-
 
 const get_DynamicsTickets = async (req, res) => {
     try {
@@ -249,9 +206,21 @@ const getUTCOffset = (timezone) => {
     }
 };
 
+const stripScheduleFromDescription = (description) => {
+    if (!description) return "";
+    
+    const marker = "\n\nAvailable Date and Time for Support Call:";
+    const index  = description.indexOf(marker);
+    
+    return index !== -1 ? description.slice(0, index) : description;
+};
+
 const buildDescriptionWithSchedule = (description, dates, startTimes, endTimes, timezone) => {
-    const offset     = getUTCOffset(timezone);          
-    const tzLabel    = offset ? `${timezone} (${offset})` : timezone;
+   
+    const cleanDescription = stripScheduleFromDescription(description);
+
+    const offset  = getUTCOffset(timezone);
+    const tzLabel = offset ? `${timezone} (${offset})` : timezone;
 
     const scheduleLines = dates.map((date, i) => {
         const d       = new Date(date);
@@ -267,7 +236,7 @@ const buildDescriptionWithSchedule = (description, dates, startTimes, endTimes, 
         ...scheduleLines,
     ].join('\n');
 
-    return `${description}${scheduleSuffix}`;
+    return `${cleanDescription}${scheduleSuffix}`;
 };
 
 const create_Ticket = async (req, res) => {
@@ -374,6 +343,7 @@ const syncToDynamics = async ({
     const dates  = toArray(date);
     const starts = toArray(starttime);
     const ends   = toArray(endtime);
+
     if (dates.length > 0) {
         dynamicsPayload["ss_schedulestartdate"] = `${dates[0]}T${starts[0]}:00Z`;
         dynamicsPayload["ss_scheduleenddate"]   = `${dates[dates.length - 1]}T${ends[ends.length - 1]}:00Z`;
@@ -480,7 +450,7 @@ const syncToDynamics = async ({
                 "Content-Type":     "application/json",
                 "OData-Version":    "4.0",
                 "OData-MaxVersion": "4.0",
-                "Prefer":           "return=representation",
+               Prefer: 'return=representation, odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
             }
         }
     );
@@ -489,16 +459,144 @@ const syncToDynamics = async ({
     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
     const statusCode           = dynamicsRes.data?.statuscode   ?? null;
     const dynamicsStatus       = DYNAMICS_STATUSCODE_MAP[statusCode] ?? "New";
+    // const sourceCode  = dynamicsRes.data?.ss_source ?? null;
+    const sourceLabel = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const category = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]  ?? null;
+    const duedate = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const priority = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]  ?? null;
+    const ticketlifecycle = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"] ?? null;
 
-    console.log("Dynamics incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus });
+    console.log("Dynamics incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle });
 
     if (dynamicsIncidentId) {
         await client.query(
-            "SELECT public.ticket_update_dynamics($1, $2, $3, $4)",
-            [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus]
+            "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
         );
     }
 };
+
+
+const syncUpdateToDynamics = async ({
+    token, dynamicsIncidentId,
+    title, description, usertimezone,
+    officelocation, date, starttime, endtime,
+}) => {
+    const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
+
+    const dates  = toArray(date);
+    const starts = toArray(starttime);
+    const ends   = toArray(endtime);
+
+    const fullDescription = buildDescriptionWithSchedule(
+        description,
+        dates,
+        starts,
+        ends,
+        usertimezone
+    );
+
+    const dynamicsPayload = {
+        title,
+        description:   fullDescription,
+        ss_timezone:   usertimezone ?? null,
+        // ss_officelocation: officelocation ?? null,
+    };
+
+    const toTimeShort = (t) => t ? t.slice(0, 5) : "00:00";
+
+    if (dates.length > 0) {
+        dynamicsPayload["ss_schedulestartdate"] = `${dates[0]}T${toTimeShort(starts[0])}:00Z`;
+        dynamicsPayload["ss_scheduleenddate"]   = `${dates[dates.length - 1]}T${toTimeShort(ends[ends.length - 1])}:00Z`;
+    }
+
+    await axios.patch(
+        `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
+        dynamicsPayload,
+        {
+            headers: {
+                Authorization:      `Bearer ${token}`,
+                Accept:             "application/json",
+                "Content-Type":     "application/json",
+                "OData-Version":    "4.0",
+                "OData-MaxVersion": "4.0",
+            }
+        }
+    );
+
+    console.log(`[DYNAMICS] Incident updated: ${dynamicsIncidentId}`);
+};
+
+const update_Ticket = async (req, res) => {
+    try {
+        const {
+            ticketuuid,
+            title,
+            description,
+            usertimezone,
+            officelocation,
+            date,
+            starttime,
+            endtime,
+            modifiedby,
+        } = req.body;
+
+        const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
+
+        const dates      = toArray(date);
+        const startTimes = toArray(starttime);
+        const endTimes   = toArray(endtime);
+
+        const [result, token, dynamicsResult] = await Promise.all([
+            client.query(
+                "SELECT * FROM ticket_update($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                [
+                    ticketuuid,
+                    title,
+                    description,
+                    usertimezone,
+                    officelocation,
+                    dates,
+                    startTimes,
+                    endTimes,
+                    modifiedby,
+                ]
+            ),
+            getDynamicsToken(),
+            client.query(
+                "SELECT public.ticket_get_dynamicsincidentid($1) AS dynamicsincidentid",
+                [ticketuuid]
+            ),
+        ]);
+
+        const dynamicsIncidentId = dynamicsResult.rows[0]?.dynamicsincidentid ?? null;
+
+        res.status(200).json(result.rows[0]);
+
+        if (dynamicsIncidentId) {
+            syncUpdateToDynamics({
+                token,
+                dynamicsIncidentId,
+                title,
+                description,
+                usertimezone,
+                officelocation,
+                date:      dates,
+                starttime: startTimes,
+                endtime:   endTimes,
+           }).catch(err => console.error("[DYNAMICS] Background update failed:", err.response?.data ?? err.message));
+        } else {
+            console.warn(`[DYNAMICS] No dynamicsincidentid for ticketuuid: ${ticketuuid} — skipping`);
+        }
+
+    } catch (err) {
+        if (err.message) {
+            return res.status(400).json({ error: err.message });
+        }
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
 
 const buildAccountMap = (filtered) => {
     const accountMap = new Map();
@@ -581,7 +679,6 @@ const db_batchUpsertUsers = async (contactMap) => {
     try {
         await client.query(`SELECT public.batch_user_insert($1, $2, $3, $4, $5, $6, $7)`, [emails, usernames, jobtitles, businessphones, mobilephones, departments, userroles]);
       
-
     } catch (e) {
         throw e;
     }
@@ -665,7 +762,7 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
             ticket["_slainvokedid_value@OData.Community.Display.V1.FormattedValue"]                         ?? null,
             ticket.ss_requesttype                                                                           ?? null,
             ticket["_ss_contract_value@OData.Community.Display.V1.FormattedValue"]                          ?? null,
-            ticket.ss_ticketstage                                                                           ?? null,
+            ticket["ss_ticketstage@OData.Community.Display.V1.FormattedValue"]                              ?? null,
             ticket.ss_customerconfirmation                                                                  ?? null,
             ticket["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]                           ?? null,
             ticket["ss_tickettype@OData.Community.Display.V1.FormattedValue"]                               ?? null,
@@ -679,29 +776,36 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
     );
 };
 
+const db_deleteMissingTickets = async (dynamicsIncidentIds) => {
+    if (dynamicsIncidentIds.length === 0) return;
+
+    try {
+        await client.query(
+            `SELECT public.ticket_missing_delete($1)`,
+            [dynamicsIncidentIds]
+        );
+        console.log(`[SYNC] Missing tickets deleted.`);
+    } catch (e) {
+        console.error("db_deleteMissingTickets failed:", e.message);
+        throw e;
+    }
+};
+
 const sync_DynamicsTickets_toDB = async (req, res) => {
     try {
         const token           = await getDynamicsToken();
         const ALLOWED_SOURCES = [18, 2, 4, 17, 19];
 
-        const startDate  = req.query?.startDate ?? req.body?.startDate ?? null;
-        const isCronSync = !startDate;
+       const start = new Date();
+        start.setHours(0, 0, 0, 0);
 
-        const now   = new Date();
-        // const start = startDate
-        //     ? new Date(startDate).toISOString()
-        //     : (() => {
-        //         const today = new Date();
-        //         today.setHours(0, 0, 0, 0);
-        //         return today.toISOString();
-        //     })();
-
-        // const end = now.toISOString();
+        const end = new Date();
+        end.setHours(23, 59, 59, 999);
 
         // const filter = `createdon ge 2026-01-01T00:00:00Z`;
-        const filter = `modifiedon eq ${startDate}`;
+        const filter = `modifiedon ge ${start.toISOString()} and modifiedon le ${end.toISOString()}`;
 
-        console.log(`[SYNC] Mode: ${isCronSync ? 'CRON (modifiedon today)' : 'MANUAL (createdon from ' + startDate + ')'}`);
+        console.log(`Cron mode: MANUAL (modified from ${start.toISOString()} to ${end.toISOString()})`);
 
         let allTickets = [];
         let nextLink   = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}&$top=1000`;
@@ -764,6 +868,9 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
                 skipped++;
             }
         }
+
+        const dynamicsIds = allTickets.map(t => t.incidentid); 
+        await db_deleteMissingTickets(dynamicsIds);
 
         return res.status(200).json({
             message:  "Dynamics ticket sync completed.",

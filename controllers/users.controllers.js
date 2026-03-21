@@ -290,160 +290,196 @@ const get_UserFromDb = async (req, res) => {
   }
 };
 
-const sync_Users = async (req, res) => {
-  try {
-    const token = await getAccessToken();
-    const headers = { Authorization: `Bearer ${token}` };
+const ROLE_PRIORITY = ["SuperAdmin", "Admin", "Manager", "User"];
 
-    const orgRes = await axios.get(`${GRAPH_URL}/organization`, { headers });
-    const entraTenantId     = orgRes.data.value?.[0]?.id ?? null;
-    const tenantName        = orgRes.data.value?.[0]?.displayName ?? null;
-    const tenantEmailDomain = orgRes.data.value?.[0]?.verifiedDomains?.find(d => d.isDefault)?.name ?? null;
+const fetchRolesBatch = async (users, headers) => {
+    const roleMap   = {};
+    const chunkSize = 20;
 
-    let graphUsers = [];
-    let nextLink = `${GRAPH_URL}/users?$select=${USER_FIELDS}&$top=999`;
-    while (nextLink) {
-      const response = await axios.get(nextLink, { headers, timeout: 10000 });
-      graphUsers = [...graphUsers, ...response.data.value];
-      nextLink = response.data["@odata.nextLink"] ?? null;
-    }
+    for (let i = 0; i < users.length; i += chunkSize) {
+        const chunk = users.slice(i, i + chunkSize);
 
-    if (graphUsers.length === 0) {
-      return res.status(200).json({ message: "No users found in Microsoft Graph.", synced: 0 });
-    }
+        const batchBody = {
+            requests: chunk.map((user, idx) => ({
+                id:     String(idx),
+                method: "GET",
+                url:    `/users/${user.id}/appRoleAssignments`,
+            })),
+        };
 
-    const existingResult = await client.query("SELECT * FROM public.user_entraid_get()");
-    const existingEntraIds = new Set(existingResult.rows.map((r) => r.v_entrauserid));
-
-    const newUsers = graphUsers;
-    // .filter((user) => {
-    //   return !existingEntraIds.has(user.id);
-    // });
-
-    // if (newUsers.length === 0) {
-    //   return res.status(200).json({
-    //     message: "All users are already synced.",
-    //     total: graphUsers.length,
-    //     synced: 0,
-    //     skipped: graphUsers.length,
-    //   });
-    // }
-
-    const ROLE_PRIORITY = ["SuperAdmin", "Admin", "Manager", "User"];
-
-    const roleMap = {};
-    await Promise.allSettled(
-      newUsers.map(async (user) => {
         try {
-          const roleRes = await axios.get(
-            `${GRAPH_URL}/users/${user.id}/appRoleAssignments`,
-            { headers }
-          );
-          const roles = roleRes.data.value
-            .map(r => resolveRoleName(r.appRoleId))
-            .filter(Boolean);
+            const batchRes = await axios.post(
+                "https://graph.microsoft.com/v1.0/$batch",
+                batchBody,
+                { headers: { ...headers, "Content-Type": "application/json" } }
+            );
 
-         roleMap[user.id] = roles.length > 0
-        ? roles.sort((a, b) => ROLE_PRIORITY.indexOf(a) - ROLE_PRIORITY.indexOf(b))[0]
-        : "User";
+            for (const response of batchRes.data.responses) {
+                const user  = chunk[parseInt(response.id)];
+                const value = response.body?.value ?? [];
 
-        } catch (err) {
-          console.error(`Failed to fetch roles for ${user.id}:`, err.message);
-          roleMap[user.id] = "User"; 
+                const roles = value
+                    .map(r => resolveRoleName(r.appRoleId))
+                    .filter(Boolean)
+                    .sort((a, b) => ROLE_PRIORITY.indexOf(a) - ROLE_PRIORITY.indexOf(b));
+
+                roleMap[user.id] = roles.length > 0 ? roles.join(", ") : "User";
+                // roleMap[user.id] = roles.length > 0 ? roles[0] : "User";
+            }
+        } catch (e) {
+            console.error(`[SYNC] Batch roles fetch failed for chunk ${i}:`, e.message);
+            chunk.forEach(u => { roleMap[u.id] = "User"; });
         }
-      })
-    );
 
-    let synced  = 0;
-    let skipped = 0;
-
-    for (const user of newUsers) {
-      const email = user.mail ?? user.userPrincipalName ?? null;
-      if (!email) { skipped++; continue; }
-
-      try {
-        await client.query(
-          "SELECT public.user_sync($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-          [
-            user.id,
-            entraTenantId,
-            user.displayName         ?? null,
-            user.jobTitle            ?? null,
-            user.businessPhones?.[0] ?? null,
-            email,
-            user.department          ?? null,
-            user.mobilePhone         ?? null,
-            user.createdDateTime     ?? null,
-            tenantName,
-            tenantEmailDomain,
-            roleMap[user.id]         ?? null,
-            // user.id        ?? "User",
-            user.accountEnabled      ?? true,
-          ]
-        );
-        synced++;
-      } catch (userErr) {
-        console.error(`Failed to sync user ${email}:`, userErr.message);
-        skipped++;
-      }
+        console.log(`[SYNC] Roles fetched: ${Math.min(i + chunkSize, users.length)}/${users.length}`);
     }
 
+    return roleMap;
+};
+
+const fetchManagersBatch = async (users, headers) => {
     const managerPairs = [];
-    await Promise.allSettled(
-      // newGraphUsers.map(async (user) => {
-      newUsers.map(async (user) => {
+    const chunkSize    = 20;
+
+    for (let i = 0; i < users.length; i += chunkSize) {
+        const chunk = users.slice(i, i + chunkSize);
+
+        const batchBody = {
+            requests: chunk.map((user, idx) => ({
+                id:     String(idx),
+                method: "GET",
+                url:    `/users/${user.id}/manager`,
+            })),
+        };
+
         try {
-          const managerRes = await axios.get(`${GRAPH_URL}/users/${user.id}/manager`, { headers });
-          const managerEntraId = managerRes.data?.id ?? null;
-          if (managerEntraId) {
-            managerPairs.push({ userEntraId: user.id, managerEntraId });
-          }
-        } catch {}
-      })
-    );
+            const batchRes = await axios.post(
+                "https://graph.microsoft.com/v1.0/$batch",
+                batchBody,
+                { headers: { ...headers, "Content-Type": "application/json" } }
+            );
 
-    let managersResolved = 0;
-    let managersFailed   = 0;
+            for (const response of batchRes.data.responses) {
+                if (response.status !== 200) continue;
+                const user           = chunk[parseInt(response.id)];
+                const managerEntraId = response.body?.id ?? null;
+                if (managerEntraId) {
+                    managerPairs.push({ userEntraId: user.id, managerEntraId });
+                }
+            }
+        } catch (e) {
+            console.error(`[SYNC] Batch managers fetch failed for chunk ${i}:`, e.message);
+        }
 
-    for (const pair of managerPairs) {
-      try {
+        console.log(`[SYNC] Managers fetched: ${Math.min(i + chunkSize, users.length)}/${users.length}`);
+    }
+
+    return managerPairs;
+};
+
+const sync_Users = async (req, res) => {
+    try {
+        const token   = await getAccessToken();
+        const headers = { Authorization: `Bearer ${token}` };
+
+        const orgRes            = await axios.get(`${GRAPH_URL}/organization`, { headers });
+        const entraTenantId     = orgRes.data.value?.[0]?.id ?? null;
+        const tenantName        = orgRes.data.value?.[0]?.displayName ?? null;
+        const tenantEmailDomain = orgRes.data.value?.[0]?.verifiedDomains?.find(d => d.isDefault)?.name ?? null;
+
+        let graphUsers = [];
+        let nextLink   = `${GRAPH_URL}/users?$select=${USER_FIELDS}&$top=999`;
+
+        while (nextLink) {
+            const response = await axios.get(nextLink, { headers, timeout: 10000 });
+            graphUsers     = [...graphUsers, ...response.data.value];
+            nextLink       = response.data["@odata.nextLink"] ?? null;
+        }
+
+        if (graphUsers.length === 0) {
+            return res.status(200).json({ message: "No users found in Microsoft Graph.", synced: 0 });
+        }
+
+        console.log(`[SYNC] Fetched ${graphUsers.length} users from Graph`);
+
+        const roleMap = await fetchRolesBatch(graphUsers, headers);
+
+        const validUsers = graphUsers.filter(u => u.mail ?? u.userPrincipalName);
+
+        const entrauserids   = validUsers.map(u => u.id);
+        const entratenantids = validUsers.map(() => entraTenantId);
+        const usernames      = validUsers.map(u => u.displayName         ?? null);
+        const jobtitles      = validUsers.map(u => u.jobTitle            ?? null);
+        const businessphones = validUsers.map(u => u.businessPhones?.[0] ?? null);
+        const useremails     = validUsers.map(u => u.mail ?? u.userPrincipalName ?? null);
+        const departments    = validUsers.map(u => u.department          ?? null);
+        const mobilephones   = validUsers.map(u => u.mobilePhone         ?? null);
+        const createddates   = validUsers.map(u => u.createdDateTime     ?? null);
+        const tenantnames    = validUsers.map(() => tenantName);
+        const tenantemails   = validUsers.map(() => tenantEmailDomain);
+        const userroles      = validUsers.map(u => roleMap[u.id]         ?? "User");
+        const statuses       = validUsers.map(u => u.accountEnabled ? "true" : "false");
+
         await client.query(
-          "SELECT public.user_sync_managers($1, $2)",
-          [pair.userEntraId, pair.managerEntraId]
+            `SELECT public.user_sync($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+            [
+                entrauserids,   entratenantids, usernames,    jobtitles,
+                businessphones, useremails,     departments,  mobilephones,
+                createddates,   tenantnames,    tenantemails, userroles,
+                statuses,
+            ]
         );
-        managersResolved++;
-      } catch (err) {
-        managersFailed++;
-      }
+
+        console.log(`[SYNC] Batch upserted ${validUsers.length} users`);
+
+        const managerPairs = await fetchManagersBatch(graphUsers, headers);
+
+        let managersResolved = 0;
+        let managersFailed   = 0;
+
+        if (managerPairs.length > 0) {
+            try {
+                await client.query(
+                    `SELECT public.user_batch_sync_managers($1, $2)`,
+                    [
+                        managerPairs.map(p => p.userEntraId),
+                        managerPairs.map(p => p.managerEntraId),
+                    ]
+                );
+                managersResolved = managerPairs.length;
+                console.log(`[SYNC] Batch synced ${managersResolved} managers`);
+            } catch (err) {
+                console.error("[SYNC] Batch manager sync failed:", err.message);
+                managersFailed = managerPairs.length;
+            }
+        }
+
+        return res.status(200).json({
+            message:          "Sync completed.",
+            total:            graphUsers.length,
+            synced:           validUsers.length,
+            skipped:          graphUsers.length - validUsers.length,
+            managersResolved,
+            managersFailed,
+        });
+
+    } catch (err) {
+        console.error("[SYNC] sync_Users error:", err.message);
+
+        if (err.response) {
+            return res.status(err.response.status).json({
+                error: err.response.data?.error?.message || "Graph API Error",
+            });
+        }
+
+        if (err.request) {
+            return res.status(504).json({
+                error: "No response from Microsoft Graph (Timeout or Network Issue)",
+            });
+        }
+
+        return res.status(500).json({ error: err.message });
     }
-
-    return res.status(200).json({
-      message: "Sync completed.",
-      total:            graphUsers.length,
-      new:              newUsers.length,
-      synced,
-      skipped,
-      managersResolved,
-      managersFailed,
-    });
-
-  } catch (err) {
-    console.error("sync_Users error:", err.message);
-
-    if (err.response) {
-      return res.status(err.response.status).json({
-        error: err.response.data?.error?.message || "Graph API Error",
-      });
-    }
-
-    if (err.request) {
-      return res.status(504).json({
-        error: "No response from Microsoft Graph (Timeout or Network Issue)",
-      });
-    }
-
-    return res.status(500).json({ error: err.message });
-  }
 };
 
 const sync_AllTenantUsers = async (req, res) => {

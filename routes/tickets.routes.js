@@ -10,8 +10,8 @@ router.get("/manager-team", validateToken, get_ManagerTeamTickets);
 router.get("/manager", validateToken, get_ManagerTickets);
 router.post("/", validateToken, create_Ticket);
 router.put("/",  validateToken, update_Ticket);
-router.get("/dynamics", validateToken, get_DynamicsTickets);
-router.get("/dynamics/:ticketnumber", validateToken, get_DynamicsTicketById);
+router.get("/dynamics", get_DynamicsTickets);
+router.get("/dynamics/:ticketnumber", get_DynamicsTicketById);
 router.post("/sync-dynamics", validateToken, sync_DynamicsTickets_toDB);
 
 module.exports = router;
