@@ -802,10 +802,11 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
         const end = new Date();
         end.setHours(23, 59, 59, 999);
 
-        // const filter = `createdon ge 2026-01-01T00:00:00Z`;
-        const filter = `modifiedon ge ${start.toISOString()} and modifiedon le ${end.toISOString()}`;
+        const filter = `createdon ge 2026-01-01T00:00:00Z`;
+        // const filter = `modifiedon ge ${start.toISOString()} and modifiedon le ${end.toISOString()}`;
+        // const filter = `modifiedon ge ${start.toISOString()}`;
 
-        console.log(`Cron mode: MANUAL (modified from ${start.toISOString()} to ${end.toISOString()})`);
+        console.log(`Cron mode: MANUAL (Created from 2026-01-01)`);
 
         let allTickets = [];
         let nextLink   = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}&$top=1000`;
@@ -869,8 +870,109 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
             }
         }
 
-        const dynamicsIds = allTickets.map(t => t.incidentid); 
+        const dynamicsIds = filtered.map(t => t.incidentid);
         await db_deleteMissingTickets(dynamicsIds);
+
+        return res.status(200).json({
+            message:  "Dynamics ticket sync completed.",
+            total:    allTickets.length,
+            filtered: filtered.length,
+            synced,
+            skipped,
+            ...(errors.length > 0 && { errors }),
+        });
+
+    } catch (err) {
+        console.error("sync_DynamicsTickets error:", err.message);
+        return res.status(500).json({
+            error:   "Failed to sync tickets from Dynamics",
+            details: err.response?.data || err.message,
+        });
+    }
+};
+
+
+const sync_DynamicsTickets_toDB_auto = async (req, res) => {
+    try {
+        const token           = await getDynamicsToken();
+        const ALLOWED_SOURCES = [18, 2, 4, 17, 19];
+
+       const start = new Date();
+        start.setHours(0, 0, 0, 0);
+
+        const end = new Date();
+        end.setHours(23, 59, 59, 999);
+
+        // const filter = `createdon ge 2026-01-01T00:00:00Z`;
+        const filter = `modifiedon ge ${start.toISOString()} and modifiedon le ${end.toISOString()}`;
+        // const filter = `modifiedon ge ${start.toISOString()}`;
+
+        console.log(`Cron mode: AUTOMATIC (modified from ${start.toISOString()} to ${end.toISOString()})`);
+
+        let allTickets = [];
+        let nextLink   = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}&$top=1000`;
+
+        while (nextLink) {
+            const response = await axios.get(nextLink, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: "application/json",
+                    "OData-Version": "4.0",
+                    "OData-MaxVersion": "4.0",
+                    Prefer: "odata.include-annotations=OData.Community.Display.V1.FormattedValue,odata.maxpagesize=1000",
+                },
+            });
+            allTickets.push(...response.data.value);
+            nextLink = response.data["@odata.nextLink"] ?? null;
+        }
+
+        console.log(`Fetched ${allTickets.length} tickets from Dynamics`);
+
+        const filtered = allTickets.filter(t => ALLOWED_SOURCES.includes(t.ss_source));
+        console.log(`Filtered to ${filtered.length} tickets`);
+
+        if (filtered.length === 0) {
+            return res.status(200).json({ message: "No eligible tickets found.", synced: 0 });
+        }
+
+        await db_batchUpsertTenants(buildAccountMap(filtered));
+        const tenantMap = await db_loadTenantMap();
+
+        await db_batchUpsertUsers(buildContactMap(filtered));
+        const userMap = await db_loadUserMap();
+
+        const technicianMap = await resolveTechnicianNames(filtered, token);
+
+        let synced  = 0;
+        let skipped = 0;
+        const errors = [];
+
+        for (const ticket of filtered) {
+            try {
+                const tenantid = tenantMap[ticket._customerid_value] ?? null;
+
+                if (!tenantid) {
+                    console.warn(`No tenant for ${ticket.ticketnumber}`);
+                    skipped++;
+                    continue;
+                }
+
+                const contactEmail   = ticket.ss_Contact?.emailaddress1 ?? null;
+                const userid         = contactEmail ? (userMap[contactEmail] ?? null) : null;
+                const technicianname = technicianMap[ticket._ss_assignedtechnician_value] ?? null;
+
+                await db_syncTicket(ticket, tenantid, userid, technicianname);
+                synced++;
+
+            } catch (ticketErr) {
+                console.error(`Failed to sync ${ticket.ticketnumber}:`, ticketErr.message);
+                errors.push({ ticketnumber: ticket.ticketnumber, error: ticketErr.message });
+                skipped++;
+            }
+        }
+
+        // const dynamicsIds = allTickets.map(t => t.incidentid); 
+        // await db_deleteMissingTickets(dynamicsIds);
 
         return res.status(200).json({
             message:  "Dynamics ticket sync completed.",
@@ -899,5 +1001,6 @@ module.exports = {
     get_DynamicsTickets,
     get_DynamicsTicketById,
     create_Ticket,
-    sync_DynamicsTickets_toDB
+    sync_DynamicsTickets_toDB,
+    sync_DynamicsTickets_toDB_auto
 };

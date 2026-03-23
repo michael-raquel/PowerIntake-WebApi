@@ -12,7 +12,7 @@ router.post("/", validateToken, create_Ticket);
 router.put("/",  validateToken, update_Ticket);
 router.get("/dynamics", get_DynamicsTickets);
 router.get("/dynamics/:ticketnumber", get_DynamicsTicketById);
-router.post("/sync-dynamics", validateToken, sync_DynamicsTickets_toDB);
+router.post("/sync-dynamics", sync_DynamicsTickets_toDB);
 
 module.exports = router;
  
