@@ -36,4 +36,4 @@ cron.schedule('*/5 * * * *', runSync, {
 
 console.log('[CRON] Dynamics sync scheduler started — runs every 5 minutes.');
 
-runSync();
+// runSync();

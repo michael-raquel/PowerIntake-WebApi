@@ -889,25 +889,37 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
     }
 };
 
+const db_deleteMissingTickets_modifiedon = async (dynamicsIncidentIds, from = null, to = null) => {
+    if (dynamicsIncidentIds.length === 0) return;
+
+    try {
+        await client.query(
+            `SELECT public.ticket_missing_delete_modifiedon($1, $2, $3)`,
+            [dynamicsIncidentIds, from, to]
+        );
+        console.log(`[SYNC] Missing tickets deleted.`);
+    } catch (e) {
+        console.error("db_deleteMissingTickets_modifiedon failed:", e.message);
+        throw e;
+    }
+};
 
 const sync_DynamicsTickets_toDB_auto = async (req, res) => {
     try {
-        const token           = await getDynamicsToken();
+        const token = await getDynamicsToken();
         const ALLOWED_SOURCES = [18, 2, 4, 17, 19];
 
-       const start = new Date();
+        const start = new Date();
         start.setHours(0, 0, 0, 0);
 
         const end = new Date();
         end.setHours(23, 59, 59, 999);
 
         const filter = `modifiedon ge ${start.toISOString()} and modifiedon le ${end.toISOString()}`;
-        // const filter = `modifiedon ge ${start.toISOString()}`;
-
         console.log(`Cron mode: AUTOMATIC (modified from ${start.toISOString()} to ${end.toISOString()})`);
 
         let allTickets = [];
-        let nextLink   = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}&$top=1000`;
+        let nextLink = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}&$top=1000`;
 
         while (nextLink) {
             const response = await axios.get(nextLink, {
@@ -940,27 +952,25 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
 
         const technicianMap = await resolveTechnicianNames(filtered, token);
 
-        let synced  = 0;
+        let synced = 0;
         let skipped = 0;
         const errors = [];
 
         for (const ticket of filtered) {
             try {
                 const tenantid = tenantMap[ticket._customerid_value] ?? null;
-
                 if (!tenantid) {
                     console.warn(`No tenant for ${ticket.ticketnumber}`);
                     skipped++;
                     continue;
                 }
 
-                const contactEmail   = ticket.ss_Contact?.emailaddress1 ?? null;
-                const userid         = contactEmail ? (userMap[contactEmail] ?? null) : null;
+                const contactEmail = ticket.ss_Contact?.emailaddress1 ?? null;
+                const userid = contactEmail ? (userMap[contactEmail] ?? null) : null;
                 const technicianname = technicianMap[ticket._ss_assignedtechnician_value] ?? null;
 
                 await db_syncTicket(ticket, tenantid, userid, technicianname);
                 synced++;
-
             } catch (ticketErr) {
                 console.error(`Failed to sync ${ticket.ticketnumber}:`, ticketErr.message);
                 errors.push({ ticketnumber: ticket.ticketnumber, error: ticketErr.message });
@@ -968,12 +978,12 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
             }
         }
 
-        // const dynamicsIds = allTickets.map(t => t.incidentid); 
-        // await db_deleteMissingTickets(dynamicsIds);
+        const dynamicsIds = filtered.map(t => t.incidentid);
+        await db_deleteMissingTickets_modifiedon(dynamicsIds, start.toISOString(), end.toISOString());
 
         return res.status(200).json({
-            message:  "Dynamics ticket sync completed.",
-            total:    allTickets.length,
+            message: "Dynamics ticket sync completed.",
+            total: allTickets.length,
             filtered: filtered.length,
             synced,
             skipped,
@@ -983,7 +993,7 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
     } catch (err) {
         console.error("sync_DynamicsTickets error:", err.message);
         return res.status(500).json({
-            error:   "Failed to sync tickets from Dynamics",
+            error: "Failed to sync tickets from Dynamics",
             details: err.response?.data || err.message,
         });
     }
