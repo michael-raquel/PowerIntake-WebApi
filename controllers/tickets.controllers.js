@@ -776,13 +776,13 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
     );
 };
 
-const db_deleteMissingTickets = async (dynamicsIncidentIds) => {
+const db_deleteMissingTickets = async (dynamicsIncidentIds, from = null, to = null) => {
     if (dynamicsIncidentIds.length === 0) return;
 
     try {
         await client.query(
-            `SELECT public.ticket_missing_delete($1)`,
-            [dynamicsIncidentIds]
+            `SELECT public.ticket_missing_delete($1, $2, $3)`,
+            [dynamicsIncidentIds, from, to]
         );
         console.log(`[SYNC] Missing tickets deleted.`);
     } catch (e) {
@@ -871,7 +871,7 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
         }
 
         const dynamicsIds = filtered.map(t => t.incidentid);
-        await db_deleteMissingTickets(dynamicsIds);
+        await db_deleteMissingTickets(dynamicsIds, '2026-01-01T00:00:00Z', null);
 
         return res.status(200).json({
             message:  "Dynamics ticket sync completed.",
