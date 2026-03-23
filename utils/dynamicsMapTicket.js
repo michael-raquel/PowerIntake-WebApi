@@ -1,4 +1,3 @@
-
 const mapTicket = (ticket, technicianname) => ({
     ticket: {
         incidentid:                   ticket.incidentid,

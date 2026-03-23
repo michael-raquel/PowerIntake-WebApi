@@ -803,8 +803,6 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
         end.setHours(23, 59, 59, 999);
 
         const filter = `createdon ge 2026-01-01T00:00:00Z`;
-        // const filter = `modifiedon ge ${start.toISOString()} and modifiedon le ${end.toISOString()}`;
-        // const filter = `modifiedon ge ${start.toISOString()}`;
 
         console.log(`Cron mode: MANUAL (Created from 2026-01-01)`);
 
@@ -903,7 +901,6 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
         const end = new Date();
         end.setHours(23, 59, 59, 999);
 
-        // const filter = `createdon ge 2026-01-01T00:00:00Z`;
         const filter = `modifiedon ge ${start.toISOString()} and modifiedon le ${end.toISOString()}`;
         // const filter = `modifiedon ge ${start.toISOString()}`;
 
@@ -992,6 +989,173 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
     }
 };
 
+const webhook_DynamicsTicketUpdate = async (req, res) => {
+    try {
+      
+        const secret = req.headers['x-webhook-secret'] ?? null;
+        if (!secret || secret !== process.env.DYNAMICS_WEBHOOK_SECRET) {
+            return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const body = req.body;
+
+        if (!body) {
+            return res.status(400).json({ error: "Empty request body" });
+        }
+
+        const incidentid = body?.PrimaryEntityId ?? null;
+
+        if (!incidentid) {
+            return res.status(400).json({ error: "Missing PrimaryEntityId in payload" });
+        }
+
+        const token = await getDynamicsToken();
+
+        const response = await axios.get(
+            `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${incidentid})?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}`,
+            {
+                headers: {
+                    Authorization:      `Bearer ${token}`,
+                    Accept:             "application/json",
+                    "OData-Version":    "4.0",
+                    "OData-MaxVersion": "4.0",
+                    Prefer:             "odata.include-annotations=OData.Community.Display.V1.FormattedValue",
+                }
+            }
+        );
+
+        const ticket = response.data;
+
+        if (!ticket) {
+            return res.status(404).json({ error: "Ticket not found in Dynamics" });
+        }
+
+        let technicianname = null;
+        if (ticket._ss_assignedtechnician_value) {
+            try {
+                const techRes = await axios.get(
+                    `${process.env.DYNAMICS_URL}/api/data/v9.2/systemusers(${ticket._ss_assignedtechnician_value})?$select=fullname`,
+                    {
+                        headers: {
+                            Authorization:      `Bearer ${token}`,
+                            Accept:             "application/json",
+                            "OData-Version":    "4.0",
+                            "OData-MaxVersion": "4.0",
+                        }
+                    }
+                );
+                technicianname = techRes.data.fullname ?? null;
+            } catch {
+                console.warn(`[WEBHOOK] Could not resolve technician: ${ticket._ss_assignedtechnician_value}`);
+            }
+        }
+
+        const statusCode  = ticket.statuscode ?? null;
+        const statusLabel = DYNAMICS_STATUSCODE_MAP[statusCode] ?? null;
+
+        await client.query(
+            `SELECT public.ticket_webhook_update(
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+                $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31
+            )`,
+            [
+                ticket.incidentid,                                                                                  // $1  p_dynamicsincidentid
+                ticket.title                                                                                ?? null, // $2  p_title
+                cleanDescription(ticket.description),                                                               // $3  p_description
+                ticket._ss_assignedtechnician_value                                                         ?? null, // $4  p_technicianid
+                technicianname,                                                                                      // $5  p_technicianname
+                ticket.ss_timezone                                                                          ?? null, // $6  p_timezone
+                ticket.ss_schedulestartdate                                                                 ?? null, // $7  p_schedulestartdate
+                ticket.ss_scheduleenddate                                                                   ?? null, // $8  p_scheduleenddate
+                ticket.ss_scheduletype                                                                      ?? null, // $9  p_scheduletype
+                ticket["_ss_autotaskissuetype_value@OData.Community.Display.V1.FormattedValue"]             ?? null, // $10 p_issuetype
+                ticket["_ss_autotasksubissuetype_value@OData.Community.Display.V1.FormattedValue"]          ?? null, // $11 p_subissuetype
+                ticket.ss_skillrequired                                                                     ?? null, // $12 p_skillrequired
+                ticket["ss_worktype@OData.Community.Display.V1.FormattedValue"]                             ?? null, // $13 p_worktype
+                ticket.ss_duedate                                                                           ?? null, // $14 p_target
+                ticket["ss_ticketurgency@OData.Community.Display.V1.FormattedValue"] ?? ticket.ss_ticketurgency ?? null, // $15 p_urgency
+                ticket.ss_ticketimpact                                                                      ?? null, // $16 p_impact
+                ticket["ss_source@OData.Community.Display.V1.FormattedValue"]                               ?? null, // $17 p_source
+                ticket.ss_estimatedhours?.toString()                                                        ?? null, // $18 p_estimatedhours
+                ticket.ss_actualhours?.toString()                                                           ?? null, // $19 p_actualhours
+                ticket["_slainvokedid_value@OData.Community.Display.V1.FormattedValue"]                     ?? null, // $20 p_servicelevelagreement
+                ticket.ss_requesttype                                                                       ?? null, // $21 p_requesttype
+                ticket["_ss_contract_value@OData.Community.Display.V1.FormattedValue"]                      ?? null, // $22 p_contract
+                ticket["ss_ticketstage@OData.Community.Display.V1.FormattedValue"]                          ?? null, // $23 p_ticketlifecycle
+                ticket.ss_customerconfirmation                                                              ?? null, // $24 p_customerconfirmation
+                ticket["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]                       ?? null, // $25 p_ticketcategory
+                ticket["ss_tickettype@OData.Community.Display.V1.FormattedValue"]                           ?? null, // $26 p_tickettype
+                ticket["prioritycode@OData.Community.Display.V1.FormattedValue"]                            ?? null, // $27 p_priority
+                statusLabel,                                                                                         // $28 p_status
+                ticket.ss_quickfixflag?.toString()                                                         ?? null, // $29 p_quickfixflag
+                ticket.ss_reason                                                                            ?? null, // $30 p_closurenote
+                ticket.ss_completedonautotask                                                               ?? null, // $31 p_closuredate
+            ]
+        );
+
+        console.log(`[WEBHOOK] Ticket updated from Dynamics: ${ticket.ticketnumber}`);
+        return res.status(200).json({
+            message:      "Ticket updated successfully",
+            ticketnumber: ticket.ticketnumber,
+            incidentid:   ticket.incidentid,
+        });
+
+    } catch (err) {
+        if (err.message?.includes('Ticket not found')) {
+            return res.status(404).json({ error: err.message });
+        }
+
+        console.error("[WEBHOOK] Error:", err.message);
+        return res.status(500).json({
+            error:   "Failed to process Dynamics webhook",
+            details: err.message,
+        });
+    }
+};
+
+const webhook_DynamicsTicketDelete = async (req, res) => {
+    try {
+
+        const secret = req.headers['x-webhook-secret'] ?? null;
+        if (!secret || secret !== process.env.DYNAMICS_WEBHOOK_SECRET) {
+            return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const body = req.body;
+        if (!body) {
+            return res.status(400).json({ error: "Empty request body" });
+        }
+
+        const incidentid = body?.PrimaryEntityId ?? null;
+        if (!incidentid) {
+            return res.status(400).json({ error: "Missing PrimaryEntityId in payload" });
+        }
+
+        await client.query(
+            `SELECT public.ticket_webhook_delete($1)`,
+            [incidentid]
+        );
+
+        console.log(`[WEBHOOK] Ticket deleted from DB: ${incidentid}`);
+        return res.status(200).json({
+            message:    "Ticket deleted successfully",
+            incidentid,
+        });
+
+    } catch (err) {
+        if (err.message?.includes('Ticket not found')) {
+            return res.status(404).json({ error: err.message });
+        }
+
+        console.error("[WEBHOOK] Delete error:", err.message);
+        return res.status(500).json({
+            error:   "Failed to process Dynamics delete webhook",
+            details: err.message,
+        });
+    }
+};
+
 module.exports = {
     get_Ticket,
     update_Ticket,
@@ -1002,5 +1166,7 @@ module.exports = {
     get_DynamicsTicketById,
     create_Ticket,
     sync_DynamicsTickets_toDB,
-    sync_DynamicsTickets_toDB_auto
+    sync_DynamicsTickets_toDB_auto,
+    webhook_DynamicsTicketUpdate,
+    webhook_DynamicsTicketDelete,
 };
