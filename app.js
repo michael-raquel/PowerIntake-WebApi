@@ -46,6 +46,9 @@ app.use('/groups', groups);
 const tickets = require('./routes/tickets.routes');
 app.use('/tickets', tickets);
 
+const synctickets = require("./routes/synctickets.routes");
+app.use("/synctickets", synctickets);
+
 const usersettings = require('./routes/usersettings.routes');
 app.use('/usersettings', usersettings);   
 
@@ -57,12 +60,13 @@ app.use("/notes", notes);
 
 
 
+
 const PORT = process.env.PORT;
 
 app.listen(PORT, () => {
   console.log(`Server is running on port http://localhost:${PORT}`);
 
-  require('./controllers/scheduler');
+  // require('./controllers/scheduler');
 });
 
 module.exports = app;

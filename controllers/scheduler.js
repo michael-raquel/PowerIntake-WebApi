@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { sync_DynamicsTickets_toDB } = require('./tickets.controllers');
+const { sync_DynamicsTickets_toDB_auto } = require('./tickets.controllers');
 
 const runSync = async () => {
     console.log(`[CRON] Starting Dynamics sync at ${new Date().toISOString()}`);
@@ -14,7 +14,7 @@ const runSync = async () => {
     };
 
     try {
-        await sync_DynamicsTickets_toDB(req, res);
+        await sync_DynamicsTickets_toDB_auto(req, res);
     } catch (err) {
         console.error('[CRON] Sync failed:', err.message);
     }
@@ -36,4 +36,4 @@ cron.schedule('*/5 * * * *', runSync, {
 
 console.log('[CRON] Dynamics sync scheduler started — runs every 5 minutes.');
 
-runSync();
+// runSync();

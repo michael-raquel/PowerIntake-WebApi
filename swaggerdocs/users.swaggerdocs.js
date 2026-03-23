@@ -272,6 +272,57 @@
 
 /**
  * @swagger
+ * /users/all-users-with-security-groups:
+ *   get:
+ *     summary: Get all users with security group memberships
+ *     description: Returns each user with manager, direct reports, direct groups, transitive groups, roles, and security-enabled groups.
+ *     tags: [Users]
+ *     responses:
+ *       200:
+ *         description: List of all users with security groups
+ *         content:
+ *           application/json:
+ *             example:
+ *               count: 2
+ *               users:
+ *                 - id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+ *                   displayName: "Juan dela Cruz"
+ *                   mail: "juan@spartaservices.com"
+ *                   manager:
+ *                     id: "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+ *                     displayName: "Maria Santos"
+ *                   directReports:
+ *                     - id: "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
+ *                       displayName: "Pedro Reyes"
+ *                   groups:
+ *                     - id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+ *                       displayName: "Engineering Team"
+ *                       groupTypes: ["Unified"]
+ *                       securityEnabled: true
+ *                   transitiveGroups:
+ *                     - id: "cccccccc-cccc-cccc-cccc-cccccccccccc"
+ *                       displayName: "All Staff"
+ *                       groupTypes: []
+ *                       securityEnabled: true
+ *                   roles:
+ *                     - id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+ *                       displayName: "Global Administrator"
+ *                       description: "Can manage all aspects of Azure AD"
+ *                       roleTemplateId: "62e90394-69f5-4237-9190-012177145e10"
+ *                   securityGroups:
+ *                     - id: "dddddddd-dddd-dddd-dddd-dddddddddddd"
+ *                       displayName: "IT Security"
+ *                       groupTypes: []
+ *                       securityEnabled: true
+ *       500:
+ *         description: Internal Server Error
+ *       504:
+ *         description: No response from Microsoft Graph (Timeout or Network Issue)
+ */
+
+
+/**
+ * @swagger
  * /users/groups:
  *   get:
  *     summary: Get all groups a user belongs to (direct and transitive)
