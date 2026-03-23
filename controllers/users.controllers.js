@@ -290,6 +290,29 @@ const get_UserFromDb = async (req, res) => {
   }
 };
 
+const update_UserRole = async (req, res) => {
+  try {
+    const { entrauserid, userrole, modifiedby } = req.body;
+
+    const result = await client.query(
+      "SELECT public.user_update_role($1, $2, $3)",
+      [entrauserid, userrole, modifiedby]
+    );
+
+    const useruuid = result.rows[0]?.user_update_role || null;
+
+    return res.status(200).json({ useruuid });
+  } catch (err) {
+    console.error("update_UserRole error:", err.message);
+
+    if (err.message) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 const ROLE_PRIORITY = ["SuperAdmin", "Admin", "Manager", "User"];
 
 const fetchRolesBatch = async (users, headers) => {
@@ -624,6 +647,7 @@ module.exports = {
   get_UserGroups,
   get_UserAppRoleAssignments,
   get_UserFromDb,
+  update_UserRole,
   sync_Users,
   sync_AllTenantUsers,
 };

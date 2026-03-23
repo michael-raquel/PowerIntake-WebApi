@@ -89,6 +89,43 @@
 
 /**
  * @swagger
+ * /users/role:
+ *   put:
+ *     summary: Update a user's role in the database
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           example:
+ *             entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *             userrole: "Admin"
+ *             modifiedby: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *     responses:
+ *       200:
+ *         description: Successfully updated user role
+ *         content:
+ *           application/json:
+ *             example:
+ *               useruuid: "340a5679-ad90-4275-b082-7375698f08fb"
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "VALIDATION_ERROR: User with EntraUserID aabbccdd-1234-5678-abcd-ef1234567890 does not exist."
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
+
+/**
+ * @swagger
  * /users/profile:
  *   get:
  *     summary: Get a single user by ID
