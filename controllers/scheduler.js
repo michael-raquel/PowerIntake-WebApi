@@ -14,7 +14,7 @@ const runSync = async () => {
     };
 
     try {
-        await sync_DynamicsTickets_toDB_auto(req, res);
+        // await sync_DynamicsTickets_toDB_auto(req, res);
     } catch (err) {
         console.error('[CRON] Sync failed:', err.message);
     }
