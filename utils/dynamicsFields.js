@@ -58,6 +58,7 @@ const INCIDENT_EXPAND_FIELDS = [
     "customerid_account($select=name,accountid)",
     "primarycontactid($select=fullname,contactid)",
     "ss_Contact($select=fullname,contactid,emailaddress1)",
+    // "Incident_annotation($select=annotationid,subject,notetext,createdon,modifiedon,filename,mimetype,isdocument)",
 ].join(",");
 
 module.exports = {

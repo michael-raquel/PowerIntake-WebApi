@@ -99,7 +99,6 @@ const get_ManagerTickets = async (req, res) => {
     }
 };
  
-
 const get_DynamicsTickets = async (req, res) => {
     try {
         const { startDate, endDate, status } = req.query;
@@ -129,11 +128,10 @@ const get_DynamicsTickets = async (req, res) => {
 
         const tickets = rawTickets.map(ticket =>
             mapTicket(ticket, technicianMap[ticket._ss_assignedtechnician_value] ?? null)
-            
         );
 
         return res.status(200).json({ tickets, count: tickets.length });
-        
+
     } catch (err) {
         return res.status(500).json({
             error:   "Failed to fetch tickets from Dynamics",
@@ -141,6 +139,7 @@ const get_DynamicsTickets = async (req, res) => {
         });
     }
 };
+
 
 const get_DynamicsTicketById = async (req, res) => {
     try {
@@ -152,12 +151,12 @@ const get_DynamicsTicketById = async (req, res) => {
 
         const token = await getDynamicsToken();
 
-        const response = await axios.get(
+        const ticketRes = await axios.get(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$filter=ticketnumber eq '${ticketnumber}'&$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}`,
             { headers: dynamicsHeaders(token) }
         );
 
-        const ticket = response.data.value?.[0];
+        const ticket = ticketRes.data.value?.[0];
         if (!ticket) {
             return res.status(404).json({ error: "Ticket not found" });
         }
@@ -173,11 +172,26 @@ const get_DynamicsTicketById = async (req, res) => {
             } catch {}
         }
 
-        return res.status(200).json(mapTicket(ticket, technicianname));
+       const notesRes = await axios.get(
+            `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations?$filter=objectid_incident/incidentid eq ${ticket.incidentid}&$select=notetext,subject,createdon,createdby`,
+            { headers: dynamicsHeaders(token) }
+        );
+
+        const notes = notesRes.data.value.map(n => ({
+            text: n.notetext,
+            subject: n.subject,
+            createdOn: n.createdon,
+            createdBy: n.createdby?.fullname ?? null
+        }));
+
+        const mappedTicket = mapTicket(ticket, technicianname);
+        mappedTicket.ticket.notes = notes;
+
+        return res.status(200).json(mappedTicket);
 
     } catch (err) {
         return res.status(500).json({
-            error:   "Failed to fetch ticket from Dynamics",
+            error: "Failed to fetch ticket from Dynamics",
             details: err.response?.data || err.message,
         });
     }
@@ -297,7 +311,10 @@ const create_Ticket = async (req, res) => {
             starttime: startTimes,
             endtime: endTimes,
             contactid,
-        }).catch(err => console.error("Background Dynamics sync failed:", err.message));
+        }).catch(err => {
+            console.error("Background Dynamics sync failed:", err.message);
+            console.error("Details:", JSON.stringify(err.response?.data, null, 2)); 
+        });
 
     } catch (err) {
         if (err.message) return res.status(400).json({ error: err.message });
@@ -1166,6 +1183,30 @@ const webhook_DynamicsTicketDelete = async (req, res) => {
     }
 };
 
+const get_TicketDynamicsStatus = async (req, res) => {
+    try {
+        const { ticketuuid } = req.params;
+        const result = await client.query(
+            `SELECT 
+                t.ticketuuid,
+                t.dynamicsincidentid,
+                td.ticketnumber,
+                td.status,
+                td.source,
+                td.ticketcategory,
+                td.target,
+                td.priority
+            FROM public.ticket t
+            LEFT JOIN public.ticketdynamics td ON td.ticketid = t.ticketid
+            WHERE t.ticketuuid = $1`,
+            [ticketuuid]
+        );
+        return res.status(200).json(result.rows[0] ?? {});
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+};
+
 module.exports = {
     get_Ticket,
     update_Ticket,
@@ -1179,4 +1220,5 @@ module.exports = {
     sync_DynamicsTickets_toDB_auto,
     webhook_DynamicsTicketUpdate,
     webhook_DynamicsTicketDelete,
+    get_TicketDynamicsStatus
 };

@@ -84,7 +84,16 @@ const mapTicket = (ticket, technicianname) => ({
         servicelevelagreement:    ticket["_slainvokedid_value@OData.Community.Display.V1.FormattedValue"] ?? null,
     },
 
-    
+    // notes: ticket.Incident_annotation?.map(note => ({
+    //         annotationid:  note.annotationid,
+    //         subject:       note.subject ?? null,
+    //         notetext:      note.notetext ?? null,
+    //         createdon:     note.createdon ?? null,
+    //         modifiedon:    note.modifiedon ?? null,
+    //         filename:      note.filename ?? null,
+    //         mimetype:      note.mimetype ?? null,
+    //         isdocument:    note.isdocument ?? false,
+    //     })) ?? [],
 });
 
 module.exports = { mapTicket };
