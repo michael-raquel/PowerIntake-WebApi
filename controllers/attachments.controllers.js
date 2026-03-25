@@ -45,7 +45,57 @@ const downloadBlobAsBase64 = async (blobUrl) => {
     return { base64, mimetype, filename: decodeURIComponent(blobName) };
 };
 
-const syncAttachmentToDynamics = async ({ token, dynamicsIncidentId, blobUrl, createdbyEmail }) => {
+// const syncAttachmentToDynamics = async ({ token, dynamicsIncidentId, blobUrl, createdbyEmail }) => {
+//     try {
+//         const { base64, mimetype, filename } = await downloadBlobAsBase64(blobUrl);
+
+//         const payload = {
+//             subject:      filename,
+//             filename:     filename,
+//             mimetype:     mimetype,
+//             documentbody: base64,
+//             "objectid_incident@odata.bind": `/incidents(${dynamicsIncidentId})`,
+//         };
+
+//         let callerObjectId = null;
+//         if (createdbyEmail) {
+//             try {
+//                 const userRes = await axios.get(
+//                     `${process.env.DYNAMICS_URL}/api/data/v9.2/systemusers?$filter=azureactivedirectoryobjectid eq '${createdbyEmail}'&$select=systemuserid,azureactivedirectoryobjectid`,
+//                     {
+//                         headers: {
+//                             Authorization:      `Bearer ${token}`,
+//                             Accept:             "application/json",
+//                             "OData-Version":    "4.0",
+//                             "OData-MaxVersion": "4.0",
+//                         }
+//                     }
+//                 );
+//                 callerObjectId = userRes.data.value?.[0]?.azureactivedirectoryobjectid ?? null;
+//             } catch {
+//                 console.warn(`[DYNAMICS] Could not resolve user for impersonation: ${createdbyEmail}`);
+//             }
+//         }
+
+//         const headers = {
+//             ...dynamicsHeaders(token),
+//             ...(callerObjectId ? { "CallerObjectId": callerObjectId } : {}),
+//         };
+
+//         await axios.post(
+//             `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`,
+//             payload,
+//             { headers }
+//         );
+
+//         console.log(`[DYNAMICS] Attachment synced: ${filename} → incident ${dynamicsIncidentId}`);
+
+//     } catch (err) {
+//         console.error(`[DYNAMICS] Attachment sync failed for ${blobUrl}:`, err.response?.data ?? err.message);
+//     }
+// };
+
+const syncAttachmentToDynamics = async ({ token, dynamicsIncidentId, blobUrl }) => {
     try {
         const { base64, mimetype, filename } = await downloadBlobAsBase64(blobUrl);
 
@@ -57,35 +107,10 @@ const syncAttachmentToDynamics = async ({ token, dynamicsIncidentId, blobUrl, cr
             "objectid_incident@odata.bind": `/incidents(${dynamicsIncidentId})`,
         };
 
-        let callerObjectId = null;
-        if (createdbyEmail) {
-            try {
-                const userRes = await axios.get(
-                    `${process.env.DYNAMICS_URL}/api/data/v9.2/systemusers?$filter=azureactivedirectoryobjectid eq '${createdbyEmail}'&$select=systemuserid,azureactivedirectoryobjectid`,
-                    {
-                        headers: {
-                            Authorization:      `Bearer ${token}`,
-                            Accept:             "application/json",
-                            "OData-Version":    "4.0",
-                            "OData-MaxVersion": "4.0",
-                        }
-                    }
-                );
-                callerObjectId = userRes.data.value?.[0]?.azureactivedirectoryobjectid ?? null;
-            } catch {
-                console.warn(`[DYNAMICS] Could not resolve user for impersonation: ${createdbyEmail}`);
-            }
-        }
-
-        const headers = {
-            ...dynamicsHeaders(token),
-            ...(callerObjectId ? { "CallerObjectId": callerObjectId } : {}),
-        };
-
         await axios.post(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`,
             payload,
-            { headers }
+            { headers: dynamicsHeaders(token) }
         );
 
         console.log(`[DYNAMICS] Attachment synced: ${filename} → incident ${dynamicsIncidentId}`);
@@ -126,7 +151,7 @@ const create_Attachment = async (req, res) => {
                         token,
                         dynamicsIncidentId,
                         blobUrl,
-                        createdbyEmail: createdby,
+                        // createdbyEmail: createdby,
                     })
                 )
             ).catch(err => console.error("[DYNAMICS] Attachment batch sync failed:", err.message));

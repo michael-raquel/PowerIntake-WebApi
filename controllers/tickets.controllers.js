@@ -787,7 +787,7 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
             $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-            $31,$32,$33,$34,$35,$36,$37,$38
+            $31,$32,$33,$34,$35,$36,$37,$38,$39
         )`,
         [
             ticket.incidentid,
@@ -826,8 +826,9 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
             ticket.ss_quickfixflag                                                                          ?? null,
             ticket.ss_reason                                                                                ?? null,
             ticket.ss_completedonautotask                                                                   ?? null,
-            ticket.modifiedon                                                                               ?? null,  
-            createdby
+            ticket.modifiedon                                                                               ?? null,
+            createdby,
+            ticket.ss_resolution                                                                            ?? null,  
         ]
     );
 };
@@ -1284,29 +1285,29 @@ const webhook_DynamicsTicketDelete = async (req, res) => {
     }
 };
 
-const get_TicketDynamicsStatus = async (req, res) => {
-    try {
-        const { ticketuuid } = req.params;
-        const result = await client.query(
-            `SELECT 
-                t.ticketuuid,
-                t.dynamicsincidentid,
-                td.ticketnumber,
-                td.status,
-                td.source,
-                td.ticketcategory,
-                td.target,
-                td.priority
-            FROM public.ticket t
-            LEFT JOIN public.ticketdynamics td ON td.ticketid = t.ticketid
-            WHERE t.ticketuuid = $1`,
-            [ticketuuid]
-        );
-        return res.status(200).json(result.rows[0] ?? {});
-    } catch (err) {
-        return res.status(500).json({ error: err.message });
-    }
-};
+// const get_TicketDynamicsStatus = async (req, res) => {
+//     try {
+//         const { ticketuuid } = req.params;
+//         const result = await client.query(
+//             `SELECT 
+//                 t.ticketuuid,
+//                 t.dynamicsincidentid,
+//                 td.ticketnumber,
+//                 td.status,
+//                 td.source,
+//                 td.ticketcategory,
+//                 td.target,
+//                 td.priority
+//             FROM public.ticket t
+//             LEFT JOIN public.ticketdynamics td ON td.ticketid = t.ticketid
+//             WHERE t.ticketuuid = $1`,
+//             [ticketuuid]
+//         );
+//         return res.status(200).json(result.rows[0] ?? {});
+//     } catch (err) {
+//         return res.status(500).json({ error: err.message });
+//     }
+// };
 
 module.exports = {
     get_Ticket,
@@ -1321,5 +1322,5 @@ module.exports = {
     sync_DynamicsTickets_toDB_auto,
     webhook_DynamicsTicketUpdate,
     webhook_DynamicsTicketDelete,
-    get_TicketDynamicsStatus
+    // get_TicketDynamicsStatus
 };

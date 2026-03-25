@@ -22,7 +22,7 @@ app.use(cors({
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-webhook-secret'],
 }));
 
 app.use(express.json());  
@@ -66,7 +66,7 @@ app.listen(PORT, () => {
 
 
   if (process.env.ENABLE_CRON.toLowerCase() === 'true') {
-    
+
     require('./controllers/scheduler');
     console.log('[CRON] Scheduler ENABLED');
 
