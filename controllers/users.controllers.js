@@ -290,6 +290,25 @@ const get_UserFromDb = async (req, res) => {
   }
 };
 
+const get_User_Info = async (req, res) => {
+    try {
+        const { entrauserid } = req.query;
+
+        if (!entrauserid) {
+            return res.status(400).json({ error: "entrauserid is required" });
+        }
+
+        const result = await client.query(
+            `SELECT * FROM public.user_get_info($1)`,
+            [entrauserid]
+        );
+
+        return res.status(200).json(result.rows);
+    } catch (err) {
+        return res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
 const update_UserRole = async (req, res) => {
   try {
     const { entrauserid, userrole, modifiedby } = req.body;
@@ -647,6 +666,7 @@ module.exports = {
   get_UserGroups,
   get_UserAppRoleAssignments,
   get_UserFromDb,
+  get_User_Info,
   update_UserRole,
   sync_Users,
   sync_AllTenantUsers,

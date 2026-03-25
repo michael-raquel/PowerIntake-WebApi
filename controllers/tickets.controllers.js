@@ -779,13 +779,15 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
     const statusLabel = DYNAMICS_STATUSCODE_MAP[statusCode]
                      ?? ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]
                      ?? null;
+                     
+    const createdby = ticket.ss_Contact?.emailaddress1 ?? null;
 
     await client.query(
         `SELECT * FROM public.ticket_sync_dynamics(
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
             $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-            $31,$32,$33,$34,$35,$36,$37
+            $31,$32,$33,$34,$35,$36,$37,$38
         )`,
         [
             ticket.incidentid,
@@ -825,6 +827,7 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
             ticket.ss_reason                                                                                ?? null,
             ticket.ss_completedonautotask                                                                   ?? null,
             ticket.modifiedon                                                                               ?? null,  
+            createdby
         ]
     );
 };
@@ -844,23 +847,82 @@ const db_deleteMissingTickets = async (dynamicsIncidentIds, from = null, to = nu
     }
 };
 
+
+const stripHtml = (html) => {
+    if (!html) return '';
+    return html
+        .replace(/<[^>]*>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .trim();
+};
+
+const db_syncTicketNotes = async (ticket, token) => {
+    if (!ticket.incidentid) return;
+
+    try {
+       const url = `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`
+          + `?$filter=_objectid_value eq ${ticket.incidentid}`
+          + `&$select=annotationid,subject,notetext,createdon,modifiedon,_objectid_value`
+          + `&$expand=createdby($select=internalemailaddress)`; 
+        const notesRes = await axios.get(url, {
+            headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/json",
+                "OData-Version": "4.0",
+                "OData-MaxVersion": "4.0",
+            },
+        });
+
+        const notes = notesRes.data.value ?? [];
+        console.log(`[NOTES] ${ticket.ticketnumber} — ${notes.length} notes`);
+
+        if (notes.length === 0) return;
+
+        for (const note of notes) {
+            try {
+                const annotationid = note.annotationid ?? null;
+                const dynamicsincidentid = note._objectid_value ?? null;
+                const subject = note.subject ?? 'Note';
+                const notetext = stripHtml(note.notetext) ?? '';
+                const createdon = note.createdon ?? new Date().toISOString();
+                const modifiedon = note.modifiedon ?? createdon;
+                const createdby  = note.createdby?.internalemailaddress  ?? null;
+                const modifiedby = null; 
+
+                if (!annotationid || !dynamicsincidentid) {
+                    console.warn(`[NOTES] Skipping note due to missing IDs: ticket ${ticket.ticketnumber}`);
+                    continue;
+                }
+
+                await client.query(
+                    `SELECT public.note_sync_dynamics_batch($1, $2, $3, $4, $5, $6, $7, $8)`,
+                    [[annotationid], [dynamicsincidentid], [subject], [notetext], [createdon], [modifiedon], [createdby], [modifiedby]]
+                );
+
+            } catch (noteErr) {
+                console.warn(`[NOTES] Failed for ticket ${ticket.ticketnumber}, annotation ${note.annotationid}:`, noteErr.response?.data || noteErr.message);
+            }
+        }
+
+    } catch (noteErr) {
+        console.warn(`[NOTES] Failed fetching notes for ${ticket.ticketnumber}:`, noteErr.response?.data || noteErr.message);
+    }
+};
+
 const sync_DynamicsTickets_toDB = async (req, res) => {
     try {
-        const token           = await getDynamicsToken();
+        const token = await getDynamicsToken();
         const ALLOWED_SOURCES = [18, 2, 4, 17, 19];
 
-       const start = new Date();
-        start.setHours(0, 0, 0, 0);
-
-        const end = new Date();
-        end.setHours(23, 59, 59, 999);
-
         const filter = `createdon ge 2026-01-01T00:00:00Z`;
-
         console.log(`Cron mode: MANUAL (Created from 2026-01-01)`);
 
         let allTickets = [];
-        let nextLink   = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}&$top=1000`;
+        let nextLink = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}&$top=1000`;
 
         while (nextLink) {
             const response = await axios.get(nextLink, {
@@ -877,7 +939,6 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
         }
 
         console.log(`Fetched ${allTickets.length} tickets from Dynamics`);
-
         const filtered = allTickets.filter(t => ALLOWED_SOURCES.includes(t.ss_source));
         console.log(`Filtered to ${filtered.length} tickets`);
 
@@ -887,31 +948,33 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
 
         await db_batchUpsertTenants(buildAccountMap(filtered));
         const tenantMap = await db_loadTenantMap();
-
         await db_batchUpsertUsers(buildContactMap(filtered));
         const userMap = await db_loadUserMap();
-
         const technicianMap = await resolveTechnicianNames(filtered, token);
 
-        let synced  = 0;
+        let synced = 0;
         let skipped = 0;
         const errors = [];
 
         for (const ticket of filtered) {
             try {
                 const tenantid = tenantMap[ticket._customerid_value] ?? null;
-
                 if (!tenantid) {
                     console.warn(`No tenant for ${ticket.ticketnumber}`);
                     skipped++;
                     continue;
                 }
 
-                const contactEmail   = ticket.ss_Contact?.emailaddress1 ?? null;
-                const userid         = contactEmail ? (userMap[contactEmail] ?? null) : null;
+                const contactEmail = ticket.ss_Contact?.emailaddress1 ?? null;
+                const userid = contactEmail ? (userMap[contactEmail] ?? null) : null;
                 const technicianname = technicianMap[ticket._ss_assignedtechnician_value] ?? null;
 
                 await db_syncTicket(ticket, tenantid, userid, technicianname);
+
+                db_syncTicketNotes(ticket, token).catch(err => {
+                    console.warn(`[NOTES] Background sync failed for ${ticket.ticketnumber}:`, err.message);
+                });
+
                 synced++;
 
             } catch (ticketErr) {
@@ -925,8 +988,8 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
         await db_deleteMissingTickets(dynamicsIds, '2026-01-01T00:00:00Z', null);
 
         return res.status(200).json({
-            message:  "Dynamics ticket sync completed.",
-            total:    allTickets.length,
+            message: "Dynamics ticket sync completed.",
+            total: allTickets.length,
             filtered: filtered.length,
             synced,
             skipped,
@@ -936,7 +999,7 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
     } catch (err) {
         console.error("sync_DynamicsTickets error:", err.message);
         return res.status(500).json({
-            error:   "Failed to sync tickets from Dynamics",
+            error: "Failed to sync tickets from Dynamics",
             details: err.response?.data || err.message,
         });
     }
@@ -1023,7 +1086,9 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
                 const technicianname = technicianMap[ticket._ss_assignedtechnician_value] ?? null;
 
                 await db_syncTicket(ticket, tenantid, userid, technicianname);
+                await db_syncTicketNotes(ticket, token);
                 synced++;
+                
             } catch (ticketErr) {
                 console.error(`Failed to sync ${ticket.ticketnumber}:`, ticketErr.message);
                 errors.push({ ticketnumber: ticket.ticketnumber, error: ticketErr.message });
