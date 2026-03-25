@@ -59,14 +59,20 @@ const notes = require("./routes/notes.routes");
 app.use("/notes", notes);
 
 
-
-
 const PORT = process.env.PORT;
 
 app.listen(PORT, () => {
   console.log(`Server is running on port http://localhost:${PORT}`);
 
-  // require('./controllers/scheduler');
+
+  if (process.env.ENABLE_CRON.toLowerCase() === 'true') {
+    
+    require('./controllers/scheduler');
+    console.log('[CRON] Scheduler ENABLED');
+
+  } else {
+    console.log('[CRON] Scheduler DISABLED (local)');
+  }
 });
 
 module.exports = app;

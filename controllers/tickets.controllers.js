@@ -98,8 +98,8 @@ const get_ManagerTickets = async (req, res) => {
         return res.status(500).json({ error: "Internal Server Error" });
     }
 };
- 
-const get_DynamicsTickets = async (req, res) => {
+
+ const get_DynamicsTickets = async (req, res) => {
     try {
         const { startDate, endDate, status } = req.query;
 
@@ -126,20 +126,55 @@ const get_DynamicsTickets = async (req, res) => {
 
         const technicianMap = await resolveTechnicianNames(rawTickets, token);
 
+        const incidentIds = rawTickets.map(t => t.incidentid);
+
+        let notesMap = {};
+
+        if (incidentIds.length > 0) {
+            const notesFilter = incidentIds
+                .map(id => `_objectid_value eq ${id}`)
+                .join(' or ');
+
+            const notesRes = await axios.get(
+                `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations?$filter=${notesFilter}&$select=annotationid,subject,notetext,createdon,filename,mimetype,_objectid_value`,
+                { headers: dynamicsHeaders(token) }
+            );
+
+            notesRes.data.value.forEach(n => {
+                const ticketId = n._objectid_value;
+
+                if (!notesMap[ticketId]) {
+                    notesMap[ticketId] = [];
+                }
+
+                notesMap[ticketId].push({
+                    annotationid: n.annotationid,
+                    subject: n.subject,
+                    text: n.notetext,
+                    createdOn: n.createdon,
+                    filename: n.filename,
+                    mimetype: n.mimetype
+                });
+            });
+        }
+
         const tickets = rawTickets.map(ticket =>
-            mapTicket(ticket, technicianMap[ticket._ss_assignedtechnician_value] ?? null)
+            mapTicket(
+                ticket,
+                technicianMap[ticket._ss_assignedtechnician_value] ?? null,
+                notesMap[ticket.incidentid] ?? []
+            )
         );
 
         return res.status(200).json({ tickets, count: tickets.length });
 
     } catch (err) {
         return res.status(500).json({
-            error:   "Failed to fetch tickets from Dynamics",
+            error: "Failed to fetch tickets from Dynamics",
             details: err.response?.data || err.message,
         });
     }
 };
-
 
 const get_DynamicsTicketById = async (req, res) => {
     try {
@@ -172,20 +207,21 @@ const get_DynamicsTicketById = async (req, res) => {
             } catch {}
         }
 
-       const notesRes = await axios.get(
-            `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations?$filter=objectid_incident/incidentid eq ${ticket.incidentid}&$select=notetext,subject,createdon,createdby`,
+        const notesRes = await axios.get(
+            `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations?$filter=_objectid_value eq ${ticket.incidentid}&$select=annotationid,subject,notetext,createdon,filename,mimetype`,
             { headers: dynamicsHeaders(token) }
         );
 
         const notes = notesRes.data.value.map(n => ({
-            text: n.notetext,
+            annotationid: n.annotationid,
             subject: n.subject,
+            text: n.notetext,
             createdOn: n.createdon,
-            createdBy: n.createdby?.fullname ?? null
+            filename: n.filename,
+            mimetype: n.mimetype
         }));
 
-        const mappedTicket = mapTicket(ticket, technicianname);
-        mappedTicket.ticket.notes = notes;
+        const mappedTicket = mapTicket(ticket, technicianname, notes);
 
         return res.status(200).json(mappedTicket);
 

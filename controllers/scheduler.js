@@ -8,13 +8,13 @@ const runSync = async () => {
     const res = {
         status: (code) => ({
             json: (data) => {
-                console.log(`[CRON] Sync done — status ${code}:`, data.message ?? data.error);
+                console.log(`[CRON] Sync done — Status ${code}:`, data.message ?? data.error, `Time: ${new Date().toLocaleString()}`);
             },
         }),
     };
 
     try {
-        // await sync_DynamicsTickets_toDB_auto(req, res);
+        await sync_DynamicsTickets_toDB_auto(req, res);
     } catch (err) {
         console.error('[CRON] Sync failed:', err.message);
     }
@@ -36,4 +36,4 @@ cron.schedule('*/5 * * * *', runSync, {
 
 console.log('[CRON] Dynamics sync scheduler started — runs every 5 minutes.');
 
-// runSync();
+runSync();
