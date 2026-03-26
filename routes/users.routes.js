@@ -5,7 +5,7 @@ const { get_AllUsers, get_UserById, get_UserManager, get_UserDirectReports,
         update_UserRole, sync_Users, sync_AllTenantUsers } = require('../controllers/users.controllers');
 const validateToken = require("../middlewares/validateToken");
 
-router.get('/', validateToken, get_AllUsers);
+router.get('/', get_AllUsers);
 router.get('/profile', validateToken, get_UserById);
 router.get('/manager', validateToken, get_UserManager);
 router.get('/direct-reports', validateToken, get_UserDirectReports);

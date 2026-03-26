@@ -651,3 +651,53 @@
  *                   type: string
  *                   example: connect ECONNREFUSED
  */
+
+/**
+ * @swagger
+ * /tickets/reactivate:
+ *   post:
+ *     summary: Reactivate a ticket in Microsoft Dynamics 365
+ *     tags: [Tickets]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - ticketuuid
+ *             properties:
+ *               ticketuuid:
+ *                 type: string
+ *                 example: "a1b2c3d4-e5f6-7890-abcd-1234567890ef"
+ *                 description: Unique identifier of the ticket in the system
+ *     responses:
+ *       200:
+ *         description: Ticket successfully reactivated in Dynamics
+ *         content:
+ *           application/json:
+ *             example:
+ *               message: "Ticket reactivated successfully"
+ *               dynamicsIncidentId: "401b6fb2-2b92-f011-b4cc-000d3a332b4b"
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "ticketuuid is required"
+ *       404:
+ *         description: No linked Dynamics ticket found
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "No Dynamics incident linked to this ticket"
+ *       500:
+ *         description: Failed to reactivate ticket in Dynamics
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Failed to reactivate ticket in Dynamics"
+ *               details: "Request failed with status code 400"
+ */
