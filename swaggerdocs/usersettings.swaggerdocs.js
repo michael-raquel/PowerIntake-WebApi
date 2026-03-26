@@ -146,3 +146,41 @@
  *             example:
  *               error: "Internal Server Error"
  */
+
+/**
+ * @swagger
+ * /usersettings/record-counts:
+ *   patch:
+ *     summary: Update user settings record counts
+ *     tags: [UserSettings]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           example:
+ *             entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *             ticketrecordcount: 50
+ *             managerecordcount: 25
+ *             modifiedby: "999e4567-e89b-12d3-a456-426614174999"
+ *     responses:
+ *       200:
+ *         description: Successfully updated record counts
+ *         content:
+ *           application/json:
+ *             example:
+ *               message: "Record counts updated successfully"
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "VALIDATION_ERROR: User with EntraUserID aabbccdd-1234-5678-abcd-ef1234567890 does not exist."
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
