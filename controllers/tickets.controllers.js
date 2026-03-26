@@ -1339,12 +1339,6 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
 
 const webhook_DynamicsTicketUpdate = async (req, res) => {
     try {
-      
-        const secret = req.headers['x-webhook-secret'] ?? null;
-        if (!secret || secret !== process.env.DYNAMICS_WEBHOOK_SECRET) {
-            return res.status(401).json({ error: "Unauthorized" });
-        }
-
         const body = req.body;
 
         if (!body) {
@@ -1465,18 +1459,14 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
 
 const webhook_DynamicsTicketDelete = async (req, res) => {
     try {
-
-        const secret = req.headers['x-webhook-secret'] ?? null;
-        if (!secret || secret !== process.env.DYNAMICS_WEBHOOK_SECRET) {
-            return res.status(401).json({ error: "Unauthorized" });
-        }
-
         const body = req.body;
+
         if (!body) {
             return res.status(400).json({ error: "Empty request body" });
         }
 
         const incidentid = body?.PrimaryEntityId ?? null;
+
         if (!incidentid) {
             return res.status(400).json({ error: "Missing PrimaryEntityId in payload" });
         }
