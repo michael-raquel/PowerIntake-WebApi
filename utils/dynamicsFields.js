@@ -51,6 +51,7 @@ const INCIDENT_SELECT_FIELDS = [
     "ss_firstresponseduedatetime",
     "ss_creatorresourceid",
     "ss_reason",
+    "ss_airouted",
     "ss_completedonautotask",
 ].join(",");
 

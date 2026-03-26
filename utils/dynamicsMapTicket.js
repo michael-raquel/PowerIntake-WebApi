@@ -61,7 +61,7 @@ const mapTicket = (ticket, technicianname, notes = []) => ({
         quickfixflag: ticket.ss_quickfixflag ?? null,
         requesttype: ticket.ss_requesttype ?? null,
         resolution: ticket.ss_resolution ?? null,
-        resolveddate: ticket.ss_resolveddate ?? null,
+       resolveddate: ticket.ss_resolveddate ?? ticket.resolvedon ?? null,
         customerconfirmation: ticket.ss_customerconfirmation ?? null,
         autotaskid: ticket.ss_autotaskid ?? null,
         autotaskurl: ticket.ss_autotaskurl ?? null,
@@ -75,9 +75,10 @@ const mapTicket = (ticket, technicianname, notes = []) => ({
         additionalcontacts: ticket._ss_additionalcontacts_value ?? null,
         creatorresourceid: ticket.ss_creatorresourceid ?? null,
         closurenote: ticket.ss_reason ?? null,
-        closuredate: ticket.ss_completedonautotask ?? null,
+        completedonautotask : ticket.ss_completedonautotask ?? null,
         ticketlifecycle: ticket.ss_ticketstage ?? null,
         servicelevelagreement: ticket["_slainvokedid_value@OData.Community.Display.V1.FormattedValue"] ?? null,
+        airouted: ticket.ss_airouted ?? ticket.isrouted ?? null,
     }
 });
 
