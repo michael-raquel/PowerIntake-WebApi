@@ -6,6 +6,7 @@ const { getDynamicsToken } = require("../utils/dynamicsToken");
 const { cleanDescription, dynamicsHeaders, resolveTechnicianNames } = require("../utils/dynamicsHelpers");
 const { INCIDENT_SELECT_FIELDS, INCIDENT_EXPAND_FIELDS } = require("../utils/dynamicsFields");
 const { mapTicket } = require("../utils/dynamicsMapTicket");
+const { syncAttachmentToDynamics, downloadBlobAsBase64 } = require("../utils/dynamicsAttachment");
 
 const get_Ticket = async (req, res) => {
     try {
@@ -341,15 +342,16 @@ const create_Ticket = async (req, res) => {
             token, ticketuuid, dynamicsAccountId,
             userInfo,
             title,
-            description: fullDescription,  
+            description: fullDescription,
             usertimezone,
-            date: dates,
-            starttime: startTimes,
-            endtime: endTimes,
+            date:        dates,
+            starttime:   startTimes,
+            endtime:     endTimes,
             contactid,
+            attachments: toArray(attachments), 
         }).catch(err => {
             console.error("Background Dynamics sync failed:", err.message);
-            console.error("Details:", JSON.stringify(err.response?.data, null, 2)); 
+            console.error("Details:", JSON.stringify(err.response?.data, null, 2));
         });
 
     } catch (err) {
@@ -379,9 +381,8 @@ const create_Ticket = async (req, res) => {
 
 const syncToDynamics = async ({
     token, ticketuuid, dynamicsAccountId,
-    userInfo, 
-    title, description, usertimezone,
-    date, starttime, endtime, contactid,
+    userInfo, title, description, usertimezone,
+    date, starttime, endtime, contactid, attachments
 }) => {
     const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
 
@@ -521,11 +522,21 @@ const syncToDynamics = async ({
 
     console.log("Dynamics incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle });
 
-    if (dynamicsIncidentId) {
+   if (dynamicsIncidentId) {
         await client.query(
             "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
         );
+
+        const attachmentList = toArray(attachments);
+        if (attachmentList.length > 0) {
+            console.log(`[DYNAMICS] Syncing ${attachmentList.length} attachment(s) to incident ${dynamicsIncidentId}`);
+            await Promise.all(
+                attachmentList.map(blobUrl =>
+                    syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
+                )
+            ).catch(err => console.error("[DYNAMICS] Attachment sync failed:", err.message));
+        }
     }
 };
 
@@ -959,15 +970,15 @@ const db_batchUpsertUsers = async (contactMap) => {
     }
 };
 
-const db_getExistingUserEmails = async (emails) => {
-    try {
-        const result = await client.query(`SELECT * FROM public.batch_email_check($1)`, [emails]);
-        return new Set(result.rows.map(r => r.useremail));  
-    } catch (e) {
-        console.error("db_getExistingUserEmails failed:", e.message);
-        throw e;
-    }
-};
+// const db_getExistingUserEmails = async (emails) => {
+//     try {
+//         const result = await client.query(`SELECT * FROM public.batch_email_check($1)`, [emails]);
+//         return new Set(result.rows.map(r => r.useremail));  
+//     } catch (e) {
+//         console.error("db_getExistingUserEmails failed:", e.message);
+//         throw e;
+//     }
+// };
 
 const db_loadTenantMap = async () => {
     try {
@@ -1047,7 +1058,7 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
             statusLabel,
             ticket.ss_quickfixflag                                                                          ?? null,
             ticket.ss_reason                                                                                ?? null,
-            ticket.ss_completedonautotask                                                                   ?? null,
+            ticket.ss_resolveddate                                                                          ?? null,
             ticket.modifiedon                                                                               ?? null,
             createdby,
             ticket.ss_resolution                                                                            ?? null,  
@@ -1499,6 +1510,134 @@ const webhook_DynamicsTicketDelete = async (req, res) => {
     }
 };
 
+const webhook_DynamicsNoteSync = async (req, res) => {
+    try {
+        const body = req.body;
+
+        if (!body) {
+            return res.status(400).json({ error: "Empty request body" });
+        }
+
+        const annotationid = body?.PrimaryEntityId ?? null;
+        if (!annotationid) {
+            return res.status(400).json({ error: "Missing PrimaryEntityId in payload" });
+        }
+
+        const messageName = body?.MessageName?.toLowerCase() ?? null;
+        if (!messageName) {
+            return res.status(400).json({ error: "Missing MessageName in payload" });
+        }
+
+        if (messageName === "delete") {
+            await client.query(
+                `SELECT public.note_webhook_delete($1)`,
+                [annotationid]
+            );
+
+            console.log(`[WEBHOOK] Annotation deleted: ${annotationid}`);
+            return res.status(200).json({
+                message: "Annotation deleted successfully",
+                annotationid,
+            });
+        }
+
+        if (messageName === "create" || messageName === "update") {
+            const token = await getDynamicsToken();
+
+            const noteRes = await axios.get(
+                `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=annotationid,subject,notetext,createdon,modifiedon,isdocument,filename,mimetype,documentbody,_objectid_value&$expand=createdby($select=internalemailaddress)`,
+                {
+                    headers: {
+                        Authorization:      `Bearer ${token}`,
+                        Accept:             "application/json",
+                        "OData-Version":    "4.0",
+                        "OData-MaxVersion": "4.0",
+                        Prefer:             "odata.include-annotations=OData.Community.Display.V1.FormattedValue",
+                    },
+                }
+            );
+
+            const note = noteRes.data;
+            if (!note) {
+                return res.status(404).json({ error: "Note not found in Dynamics" });
+            }
+
+            const incidentid = note._objectid_value ?? null;
+            if (!incidentid) {
+                return res.status(400).json({ error: "Note is not linked to an incident" });
+            }
+
+            const ticketRes = await client.query(
+                `SELECT public.ticket_get_incidentid($1) AS ticketid`,
+                [incidentid]
+            );
+            const ticketid  = ticketRes.rows[0]?.ticketid ?? null;
+            const createdby = note.createdby?.internalemailaddress ?? null;
+
+            const results = { annotationid, note: false, attachment: false };
+
+            if (note.notetext) {
+                await client.query(
+                    `SELECT public.note_webhook_sync($1, $2, $3, $4, $5, $6)`,
+                    [
+                        note.annotationid,
+                        ticketid,
+                        note.notetext    ?? null,
+                        note.createdon   ?? null,
+                        note.modifiedon  ?? null,
+                        createdby,
+                    ]
+                );
+                results.note = true;
+                console.log(`[WEBHOOK] Note text synced (${messageName}): ${annotationid}`);
+            }
+
+            if (note.isdocument && note.documentbody && note.filename) {
+                const blobUrl = await downloadBlobAsBase64({
+                    filename:     note.filename,
+                    mimetype:     note.mimetype,
+                    documentbody: note.documentbody,
+                });
+
+                await client.query(
+                    `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
+                    [
+                        note.annotationid,
+                        ticketid,
+                        blobUrl,
+                        note.createdon ?? null,
+                        createdby,
+                    ]
+                );
+                results.attachment = true;
+                console.log(`[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${note.filename}`);
+            }
+
+            return res.status(200).json({
+                message: `Annotation ${messageName}d successfully`,
+                ...results,
+            });
+        }
+
+        return res.status(400).json({ error: `Unhandled MessageName: ${messageName}` });
+
+    } catch (err) {
+        if (err.message?.includes("Annotation not found")) {
+            return res.status(404).json({ error: err.message });
+        }
+        if (err.message?.includes("Ticket not found")) {
+            return res.status(404).json({ error: err.message });
+        }
+
+        console.error("[WEBHOOK] Note sync error:", err.message);
+        return res.status(500).json({
+            error:   "Failed to process Dynamics note webhook",
+            details: err.message,
+        });
+    }
+};
+
+
 const reactivate_DynamicsTicket = async (req, res) => {
     try {
         const { ticketuuid } = req.body;
@@ -1548,29 +1687,7 @@ const reactivate_DynamicsTicket = async (req, res) => {
         });
     }
 };
-// const get_TicketDynamicsStatus = async (req, res) => {
-//     try {
-//         const { ticketuuid } = req.params;
-//         const result = await client.query(
-//             `SELECT 
-//                 t.ticketuuid,
-//                 t.dynamicsincidentid,
-//                 td.ticketnumber,
-//                 td.status,
-//                 td.source,
-//                 td.ticketcategory,
-//                 td.target,
-//                 td.priority
-//             FROM public.ticket t
-//             LEFT JOIN public.ticketdynamics td ON td.ticketid = t.ticketid
-//             WHERE t.ticketuuid = $1`,
-//             [ticketuuid]
-//         );
-//         return res.status(200).json(result.rows[0] ?? {});
-//     } catch (err) {
-//         return res.status(500).json({ error: err.message });
-//     }
-// };
+
 
 module.exports = {
     get_Ticket,
@@ -1585,6 +1702,6 @@ module.exports = {
     sync_DynamicsTickets_toDB_auto,
     webhook_DynamicsTicketUpdate,
     webhook_DynamicsTicketDelete,
+    webhook_DynamicsNoteSync,
     reactivate_DynamicsTicket,
-    // get_TicketDynamicsStatus
 };

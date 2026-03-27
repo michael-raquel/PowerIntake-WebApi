@@ -168,18 +168,42 @@ const create_Attachment = async (req, res) => {
 
 const update_Attachment = async (req, res) => {
     try {
-        const { ticketuuid, attachments, modifiedby } = req.body;
+        const { ticketuuid, attachments, newAttachments, modifiedby } = req.body;
 
         const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
 
-        const result = await client.query(
-            "SELECT * FROM attachment_update($1, $2, $3)",
-            [ticketuuid, toArray(attachments), modifiedby]
-        );
+        const attachmentArray = toArray(attachments);
+        const newAttachmentArray = toArray(newAttachments); 
+
+        const [result, token, dynamicsResult] = await Promise.all([
+            client.query(
+                "SELECT * FROM attachment_update($1, $2, $3)",
+                [ticketuuid, attachmentArray, modifiedby]
+            ),
+            getDynamicsToken(),
+            client.query(
+                "SELECT public.ticket_get_dynamicsincidentid($1) AS dynamicsincidentid",
+                [ticketuuid]
+            ),
+        ]);
 
         const attachmentuuids = result.rows[0].attachment_update;
+        res.status(200).json({ attachmentuuids });
 
-        return res.status(200).json({ attachmentuuids });
+        const dynamicsIncidentId = dynamicsResult.rows[0]?.dynamicsincidentid ?? null;
+
+        if (dynamicsIncidentId && newAttachmentArray.length > 0) {
+            for (const blobUrl of newAttachmentArray) {
+                try {
+                    await syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl });
+                } catch (err) {
+                    console.error("[DYNAMICS] Attachment sync failed:", blobUrl, err.response?.data ?? err.message);
+                }
+            }
+        } else {
+            console.warn(`[DYNAMICS] No new attachments or no incident id — skipping`);
+        }
+
     } catch (err) {
         console.error("update_Attachment error:", err.message);
         if (err.message) return res.status(400).json({ error: err.message });
