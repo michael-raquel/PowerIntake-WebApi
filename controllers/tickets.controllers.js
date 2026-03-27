@@ -1535,6 +1535,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             );
 
             console.log(`[WEBHOOK] Annotation deleted: ${annotationid}`);
+
             return res.status(200).json({
                 message: "Annotation deleted successfully",
                 annotationid,
@@ -1548,21 +1549,22 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=annotationid,subject,notetext,createdon,modifiedon,isdocument,filename,mimetype,documentbody,_objectid_value&$expand=createdby($select=internalemailaddress)`,
                 {
                     headers: {
-                        Authorization:      `Bearer ${token}`,
-                        Accept:             "application/json",
-                        "OData-Version":    "4.0",
+                        Authorization: `Bearer ${token}`,
+                        Accept: "application/json",
+                        "OData-Version": "4.0",
                         "OData-MaxVersion": "4.0",
-                        Prefer:             "odata.include-annotations=OData.Community.Display.V1.FormattedValue",
                     },
                 }
             );
 
             const note = noteRes.data;
+
             if (!note) {
                 return res.status(404).json({ error: "Note not found in Dynamics" });
             }
 
             const incidentid = note._objectid_value ?? null;
+
             if (!incidentid) {
                 return res.status(400).json({ error: "Note is not linked to an incident" });
             }
@@ -1571,10 +1573,15 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 `SELECT public.ticket_get_incidentid($1) AS ticketid`,
                 [incidentid]
             );
-            const ticketid  = ticketRes.rows[0]?.ticketid ?? null;
+
+            const ticketid = ticketRes.rows[0]?.ticketid ?? null;
             const createdby = note.createdby?.internalemailaddress ?? null;
 
-            const results = { annotationid, note: false, attachment: false };
+            const results = {
+                annotationid,
+                note: false,
+                attachment: false,
+            };
 
             if (note.notetext) {
                 await client.query(
@@ -1582,35 +1589,42 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                     [
                         note.annotationid,
                         ticketid,
-                        note.notetext    ?? null,
-                        note.createdon   ?? null,
-                        note.modifiedon  ?? null,
+                        note.notetext ?? null,
+                        note.createdon ?? null,
+                        note.modifiedon ?? null,
                         createdby,
                     ]
                 );
+
                 results.note = true;
-                console.log(`[WEBHOOK] Note text synced (${messageName}): ${annotationid}`);
+
+                console.log(
+                    `[WEBHOOK] Note synced (${messageName}): ${annotationid}`
+                );
             }
 
             if (note.isdocument && note.documentbody && note.filename) {
-                const blobUrl = await downloadBlobAsBase64({
-                    filename:     note.filename,
-                    mimetype:     note.mimetype,
-                    documentbody: note.documentbody,
-                });
+
+                const base64 = note.documentbody; 
+                const mimetype = note.mimetype || "application/octet-stream";
+                const filename = note.filename;
 
                 await client.query(
                     `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
                     [
                         note.annotationid,
                         ticketid,
-                        blobUrl,
+                        base64,
                         note.createdon ?? null,
                         createdby,
                     ]
                 );
+
                 results.attachment = true;
-                console.log(`[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${note.filename}`);
+
+                console.log(
+                    `[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${filename}`
+                );
             }
 
             return res.status(200).json({
@@ -1619,20 +1633,25 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             });
         }
 
-        return res.status(400).json({ error: `Unhandled MessageName: ${messageName}` });
+        return res.status(400).json({
+            error: `Unhandled MessageName: ${messageName}`,
+        });
 
     } catch (err) {
-        if (err.message?.includes("Annotation not found")) {
-            return res.status(404).json({ error: err.message });
-        }
-        if (err.message?.includes("Ticket not found")) {
-            return res.status(404).json({ error: err.message });
-        }
+        const status = err.response?.status;
+        const data = err.response?.data;
 
-        console.error("[WEBHOOK] Note sync error:", err.message);
-        return res.status(500).json({
-            error:   "Failed to process Dynamics note webhook",
+        console.error("[WEBHOOK] Note sync error:", {
+            message: err.message,
+            status,
+            data,
+        });
+
+        return res.status(status || 500).json({
+            error: "Failed to process Dynamics note webhook",
             details: err.message,
+            dynamicsStatus: status || null,
+            dynamicsResponse: data || null,
         });
     }
 };
