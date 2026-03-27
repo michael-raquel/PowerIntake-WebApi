@@ -868,18 +868,26 @@ const update_Ticket = async (req, res) => {
     }
 };
 
-
 const buildAccountMap = (filtered) => {
     const accountMap = new Map();
+    const seenEntraIds = new Set();
 
     for (const t of filtered) {
         const accId = t._customerid_value;
         if (!accId || accountMap.has(accId)) continue;
 
+        const entraTenantId = t.customerid_account?.ss_azuretenantid ?? null;
+
         accountMap.set(accId, {
-            name: t["_customerid_value@OData.Community.Display.V1.FormattedValue"] || "Unknown Company",
-            entraTenantId: t.ss_Contact?.parentcustomerid?.ss_entratenantid ?? null,
+            name: t["_customerid_value@OData.Community.Display.V1.FormattedValue"]
+                ?? t.customerid_account?.name
+                ?? "Unknown Company",
+            entraTenantId: entraTenantId && !seenEntraIds.has(entraTenantId)
+                ? entraTenantId
+                : null,
         });
+
+        if (entraTenantId) seenEntraIds.add(entraTenantId);
     }
 
     return accountMap;
@@ -897,12 +905,13 @@ const buildContactMap = (filtered) => {
 
         contactMap.set(email, {
             username:      contact.fullname
-                           ?? `${contact.firstname ?? ""} ${contact.lastname ?? ""}`.trim()
-                           ?? null,
+                        ?? `${contact.firstname ?? ""} ${contact.lastname ?? ""}`.trim()
+                        ?? null,
             jobtitle:      contact.jobtitle    ?? null,
             businessphone: contact.telephone1  ?? null,
             mobilephone:   contact.mobilephone ?? null,
             department:    contact.department  ?? null,
+            entraTenantId: contact.parentcustomerid_account?.ss_azuretenantid ?? null,
         });
     }
 
@@ -929,27 +938,22 @@ const db_batchUpsertTenants = async (accountMap) => {
 const db_batchUpsertUsers = async (contactMap) => {
     if (contactMap.size === 0) return;
 
-    const existingEmails = await db_getExistingUserEmails([...contactMap.keys()]);
-    const newContacts = [...contactMap.entries()].filter(
-        ([email]) => !existingEmails.has(email)  
-    );
+    const contacts = [...contactMap.entries()];
 
-    if (newContacts.length === 0) {
-        console.log("No new users to insert.");
-        return;
-    }
-
-    const emails         = newContacts.map(([email])  => email);
-    const usernames      = newContacts.map(([, c])    => c.username      ?? null);
-    const jobtitles      = newContacts.map(([, c])    => c.jobtitle      ?? null);
-    const businessphones = newContacts.map(([, c])    => c.businessphone ?? null);
-    const mobilephones   = newContacts.map(([, c])    => c.mobilephone   ?? null);
-    const departments    = newContacts.map(([, c])    => c.department    ?? null);
-    const userroles      = newContacts.map(()         => "user");
+    const emails         = contacts.map(([email])  => email);
+    const usernames      = contacts.map(([, c])    => c.username      ?? null);
+    const jobtitles      = contacts.map(([, c])    => c.jobtitle      ?? null);
+    const businessphones = contacts.map(([, c])    => c.businessphone ?? null);
+    const mobilephones   = contacts.map(([, c])    => c.mobilephone   ?? null);
+    const departments    = contacts.map(([, c])    => c.department    ?? null);
+    const userroles      = contacts.map(()         => "user");
+    const entratenantids = contacts.map(([, c])    => c.entraTenantId ?? null);
 
     try {
-        await client.query(`SELECT public.batch_user_insert($1, $2, $3, $4, $5, $6, $7)`, [emails, usernames, jobtitles, businessphones, mobilephones, departments, userroles]);
-      
+        await client.query(
+            `SELECT public.batch_user_insert($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [emails, usernames, jobtitles, businessphones, mobilephones, departments, userroles, entratenantids]
+        );
     } catch (e) {
         throw e;
     }
