@@ -184,3 +184,40 @@
  *             example:
  *               error: "Internal Server Error"
  */
+ 
+/**
+ * @swagger
+ * /usersettings/hide-completed-tickets:
+ *   patch:
+ *     summary: Update hide completed tickets setting for a user
+ *     tags: [UserSettings]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           example:
+ *             entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *             hidecompletedtickets: "true"
+ *             modifiedby: "999e4567-e89b-12d3-a456-426614174999"
+ *     responses:
+ *       200:
+ *         description: Successfully updated hide completed tickets setting
+ *         content:
+ *           application/json:
+ *             example:
+ *               message: "Hide completed tickets setting updated successfully"
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "VALIDATION_ERROR: EntraUserID is required or invalid"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
