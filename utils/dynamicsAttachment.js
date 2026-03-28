@@ -52,7 +52,7 @@ const syncAttachmentToDynamics = async ({ token, dynamicsIncidentId, blobUrl }) 
             annotationid = match ? match[1] : null;
         }
 
-        console.log(`[DYNAMICS] Attachment synced: ${filename} → incident ${dynamicsIncidentId}, annotationid: ${annotationid}`);
+        // console.log(`[DYNAMICS] Attachment synced: ${filename} → incident ${dynamicsIncidentId}, annotationid: ${annotationid}`);
 
         return annotationid; 
 
