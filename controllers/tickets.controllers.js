@@ -630,14 +630,14 @@ const create_Ticket = async (req, res) => {
 
         const dynamicsIncidentId = await syncToDynamics({
             token, ticketuuid, dynamicsAccountId,
-            userInfo,
-            title,
+            userInfo, title,
             description: fullDescription,
             usertimezone,
             date:      dates,
             starttime: startTimes,
             endtime:   endTimes,
-            contactid,
+            contactid,  
+            attachments: toArray(attachments),
         });
 
         res.status(201).json({ ticketuuid, ticketnumber, dynamicsIncidentId });
@@ -650,9 +650,8 @@ const create_Ticket = async (req, res) => {
 
 const syncToDynamics = async ({
     token, ticketuuid, dynamicsAccountId,
-    userInfo,
-    title, description, usertimezone,
-    date, starttime, endtime, contactid,
+    userInfo, title, description, usertimezone,
+    date, starttime, endtime, contactid, attachments
 }) => {
     const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
 
@@ -796,6 +795,16 @@ const syncToDynamics = async ({
             "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
         );
+
+         const attachmentList = toArray(attachments);
+        if (attachmentList.length > 0) {
+            console.log(`[DYNAMICS] Syncing ${attachmentList.length} attachment(s) to incident ${dynamicsIncidentId}`);
+            await Promise.all(
+                attachmentList.map(blobUrl =>
+                    syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
+                )
+            ).catch(err => console.error("[DYNAMICS] Attachment sync failed:", err.message));
+        }
     }
 
     return dynamicsIncidentId;
