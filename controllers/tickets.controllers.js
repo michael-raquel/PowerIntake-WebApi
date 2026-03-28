@@ -310,346 +310,105 @@ const buildDescriptionWithSchedule = (description, dates, startTimes, endTimes, 
     };
 
 
-// const create_Ticket = async (req, res) => {
-//   try {
-//     const {
-//       entrauserid,
-//       entratenantid,
-//       title,
-//       description,
-//       date,
-//       starttime,
-//       endtime,
-//       usertimezone,
-//       officelocation,
-//       attachments,
-//       createdby,
-//       contactid,
-//     } = req.body;
-
-//     const io = req.app.get("io");
-
-//     const toArray = (val) => (Array.isArray(val) ? val : val ? [val] : []);
-//     const dates = toArray(date);
-//     const startTimes = toArray(starttime);
-//     const endTimes = toArray(endtime);
-
-//     const fullDescription = buildDescriptionWithSchedule(
-//       description,
-//       dates,
-//       startTimes,
-//       endTimes,
-//       usertimezone
-//     );
-
-//     const [result, token, tenantResult, userResult] = await Promise.all([
-//       client.query(
-//         "SELECT * FROM ticket_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-//         [
-//           entrauserid,
-//           entratenantid,
-//           title,
-//           fullDescription,
-//           dates,
-//           startTimes,
-//           endTimes,
-//           usertimezone,
-//           officelocation,
-//           toArray(attachments),
-//           createdby,
-//         ]
-//       ),
-//       getDynamicsToken(),
-//       client.query(
-//         "SELECT public.tenant_get_dynamicsaccountid($1) AS dynamicsaccountid",
-//         [entratenantid]
-//       ),
-//       client.query("SELECT * FROM public.user_get_info($1)", [entrauserid]),
-//     ]);
-
-//     const { ticketuuid, ticketnumber } = result.rows[0];
-//     const dynamicsAccountId =
-//       tenantResult.rows[0]?.dynamicsaccountid ?? null;
-//     const userInfo = userResult.rows[0] ?? {};
-
-//     res.status(201).json({
-//       ticketuuid,
-//       ticketnumber,
-//       dynamicsIncidentId: null,
-//     });
-
-//     syncToDynamics({
-//       io,
-//      entrauserid, 
-//       token,
-//       ticketuuid,
-//       dynamicsAccountId,
-//       userInfo,
-//       title,
-//       description: fullDescription,
-//       usertimezone,
-//       date: dates,
-//       starttime: startTimes,
-//       endtime: endTimes,
-//       contactid,
-//       attachments: toArray(attachments),
-//     }).catch((err) => {
-//       console.error("Background Dynamics sync failed:", err.message);
-
-//       io.to(entrauserid).emit("ticket:sync_failed", {
-//         ticketuuid,
-//         error: "Dynamics sync failed",
-//       });
-//     });
-//   } catch (err) {
-//     if (err.message) return res.status(400).json({ error: err.message });
-//     res.status(500).json({ error: "Internal Server Error" });
-//   }
-// };
-    
-// const syncToDynamics = async ({
-//     io, token, entrauserid, ticketuuid, dynamicsAccountId,
-//     userInfo, title, description, usertimezone,
-//     date, starttime, endtime, contactid, attachments
-// }) => {
-//     const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
-
-//     const dynamicsPayload = {
-//         "title":             title,
-//         "description":       description,
-//         "ss_ticketcategory": 128,
-//         "ss_source":         19,
-//         "ss_timezone":       usertimezone ?? null,
-//     };
-
-//     const dates  = toArray(date);
-//     const starts = toArray(starttime);
-//     const ends   = toArray(endtime);
-
-//     if (dates.length > 0) {
-//         dynamicsPayload["ss_schedulestartdate"] = `${dates[0]}T${starts[0]}:00Z`;
-//         dynamicsPayload["ss_scheduleenddate"]   = `${dates[dates.length - 1]}T${ends[ends.length - 1]}:00Z`;
-//     }
-
-//     if (dynamicsAccountId) {
-//         dynamicsPayload["customerid_account@odata.bind"] = `/accounts(${dynamicsAccountId})`;
-//     }
-
-//     try {
-//         const ownerRes = await axios.get(
-//             `${process.env.DYNAMICS_URL}/api/data/v9.2/systemusers?$filter=internalemailaddress eq 'Joseph@SpartaServ.com'&$select=systemuserid`,
-//             {
-//                 headers: {
-//                     Authorization:      `Bearer ${token}`,
-//                     Accept:             "application/json",
-//                     "OData-Version":    "4.0",
-//                     "OData-MaxVersion": "4.0",
-//                 }
-//             }
-//         );
-//         const ownerId = ownerRes.data.value?.[0]?.systemuserid ?? null;
-//         if (ownerId) {
-//             dynamicsPayload["ownerid@odata.bind"] = `/systemusers(${ownerId})`;
-//             console.log("Owner resolved:", ownerId);
-//         } else {
-//             console.warn("Owner not found for Joseph@SpartaServ.com");
-//         }
-//     } catch (ownerErr) {
-//         console.error("Failed to resolve owner:", ownerErr.response?.data || ownerErr.message);
-//     }
-
-//     if (contactid) {
-//         dynamicsPayload["ss_Contact@odata.bind"] = `/contacts(${contactid})`;
-//     } else if (userInfo?.useremail) {
-//         try {
-//             const contactRes = await axios.get(
-//                 `${process.env.DYNAMICS_URL}/api/data/v9.2/contacts?$filter=emailaddress1 eq '${userInfo.useremail}'&$select=contactid`,
-//                 {
-//                     headers: {
-//                         Authorization:      `Bearer ${token}`,
-//                         Accept:             "application/json",
-//                         "OData-Version":    "4.0",
-//                         "OData-MaxVersion": "4.0",
-//                     }
-//                 }
-//             );
-
-//             let dynamicsContactId = contactRes.data.value?.[0]?.contactid ?? null;
-
-//             if (!dynamicsContactId) {
-//                 console.warn(`No Dynamics contact found for ${userInfo.useremail} — creating...`);
-
-//                 const nameParts = (userInfo.username ?? "").trim().split(/\s+/);
-//                 const firstname = nameParts.length > 1 ? nameParts[0] : null;
-//                 const lastname  = nameParts.length > 1 ? nameParts.slice(1).join(" ") : nameParts[0] ?? userInfo.useremail;
-
-//                 const createContactRes = await axios.post(
-//                     `${process.env.DYNAMICS_URL}/api/data/v9.2/contacts`,
-//                     {
-//                         emailaddress1: userInfo.useremail,
-//                         firstname:     firstname,
-//                         lastname:      lastname,
-//                         jobtitle:      userInfo.jobtitle      ?? null,
-//                         telephone1:    userInfo.businessphone ?? null,
-//                         mobilephone:   userInfo.mobilephone   ?? null,
-//                         department:    userInfo.department    ?? null,
-//                         ...(dynamicsAccountId && {
-//                             "parentcustomerid_account@odata.bind": `/accounts(${dynamicsAccountId})`
-//                         }),
-//                     },
-//                     {
-//                         headers: {
-//                             Authorization:      `Bearer ${token}`,
-//                             Accept:             "application/json",
-//                             "Content-Type":     "application/json",
-//                             "OData-Version":    "4.0",
-//                             "OData-MaxVersion": "4.0",
-//                             "Prefer":           "return=representation",
-//                         }
-//                     }
-//                 );
-
-//                 dynamicsContactId = createContactRes.data?.contactid ?? null;
-//                 console.log("Contact created in Dynamics:", dynamicsContactId);
-//             }
-
-//             if (dynamicsContactId) {
-//                 dynamicsPayload["ss_Contact@odata.bind"] = `/contacts(${dynamicsContactId})`;
-//             }
-
-//         } catch (contactErr) {
-//             console.error("Failed to resolve/create Dynamics contact:", contactErr.response?.data || contactErr.message);
-//         }
-//     }
-
-//     const dynamicsRes = await axios.post(
-//         `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents`,
-//         dynamicsPayload,
-//         {
-//             headers: {
-//                 Authorization:      `Bearer ${token}`,
-//                 Accept:             "application/json",
-//                 "Content-Type":     "application/json",
-//                 "OData-Version":    "4.0",
-//                 "OData-MaxVersion": "4.0",
-//                Prefer: 'return=representation, odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
-//             }
-//         }
-//     );
-
-//     const dynamicsIncidentId   = dynamicsRes.data?.incidentid  ?? null;
-//     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
-//     const statusCode           = dynamicsRes.data?.statuscode   ?? null;
-//     const dynamicsStatus       = DYNAMICS_STATUSCODE_MAP[statusCode] ?? "New";
-//     // const sourceCode  = dynamicsRes.data?.ss_source ?? null;
-//     const sourceLabel = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"] ?? null;
-//     const category = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]  ?? null;
-//     const duedate = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"] ?? null;
-//     const priority = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]  ?? null;
-//     const ticketlifecycle = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"] ?? null;
-
-//     console.log("Dynamics incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle });
-
-//    if (dynamicsIncidentId) {
-//         await client.query(
-//             "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-//             [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
-//         );
-
-//         const updated = await client.query(
-//         "SELECT * FROM public.ticket_get($1, NULL, NULL)",
-//         [ticketuuid]
-//         );
-
-//         if (io && entrauserid && updated.rows[0]) {
-//         io.to(entrauserid).emit("ticket:synced", {
-//             ticketuuid,
-//             ticket: updated.rows[0],
-//         });
-//         console.log("[WS] Emitted ticket:synced to:", entrauserid);
-//         }
-
-
-//         const attachmentList = toArray(attachments);
-//         if (attachmentList.length > 0) {
-//             console.log(`[DYNAMICS] Syncing ${attachmentList.length} attachment(s) to incident ${dynamicsIncidentId}`);
-//             await Promise.all(
-//                 attachmentList.map(blobUrl =>
-//                     syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
-//                 )
-//             ).catch(err => console.error("[DYNAMICS] Attachment sync failed:", err.message));
-//         }
-//     }
-// };
-
 const create_Ticket = async (req, res) => {
-    try {
-        const {
-            entrauserid, entratenantid, title, description,
-            date, starttime, endtime, usertimezone, officelocation,
-            attachments, createdby, contactid,
-        } = req.body;
+  try {
+    const {
+      entrauserid,
+      entratenantid,
+      title,
+      description,
+      date,
+      starttime,
+      endtime,
+      usertimezone,
+      officelocation,
+      attachments,
+      createdby,
+      contactid,
+    } = req.body;
 
-        const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
+    const io = req.app.get("io");
 
-        const dates      = toArray(date);
-        const startTimes = toArray(starttime);
-        const endTimes   = toArray(endtime);
+    const toArray = (val) => (Array.isArray(val) ? val : val ? [val] : []);
+    const dates = toArray(date);
+    const startTimes = toArray(starttime);
+    const endTimes = toArray(endtime);
 
-        const fullDescription = buildDescriptionWithSchedule(
-            description,
-            dates,
-            startTimes,
-            endTimes,
-            usertimezone
-        );
+    const fullDescription = buildDescriptionWithSchedule(
+      description,
+      dates,
+      startTimes,
+      endTimes,
+      usertimezone
+    );
 
-        const [result, token, tenantResult, userResult] = await Promise.all([
-            client.query(
-                "SELECT * FROM ticket_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-                [
-                    entrauserid, entratenantid, title, fullDescription,
-                    dates, startTimes, endTimes,
-                    usertimezone, officelocation, toArray(attachments), createdby,
-                ]
-            ),
-            getDynamicsToken(),
-            client.query(
-                "SELECT public.tenant_get_dynamicsaccountid($1) AS dynamicsaccountid",
-                [entratenantid]
-            ),
-            client.query(
-                "SELECT * FROM public.user_get_info($1)",
-                [entrauserid]
-            ),
-        ]);
+    const [result, token, tenantResult, userResult] = await Promise.all([
+      client.query(
+        "SELECT * FROM ticket_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+        [
+          entrauserid,
+          entratenantid,
+          title,
+          fullDescription,
+          dates,
+          startTimes,
+          endTimes,
+          usertimezone,
+          officelocation,
+          toArray(attachments),
+          createdby,
+        ]
+      ),
+      getDynamicsToken(),
+      client.query(
+        "SELECT public.tenant_get_dynamicsaccountid($1) AS dynamicsaccountid",
+        [entratenantid]
+      ),
+      client.query("SELECT * FROM public.user_get_info($1)", [entrauserid]),
+    ]);
 
-        const { ticketuuid, ticketnumber } = result.rows[0];
-        const dynamicsAccountId = tenantResult.rows[0]?.dynamicsaccountid ?? null;
-        const userInfo          = userResult.rows[0] ?? {};
+    const { ticketuuid, ticketnumber } = result.rows[0];
+    const dynamicsAccountId =
+      tenantResult.rows[0]?.dynamicsaccountid ?? null;
+    const userInfo = userResult.rows[0] ?? {};
 
-        const dynamicsIncidentId = await syncToDynamics({
-            token, ticketuuid, dynamicsAccountId,
-            userInfo, title,
-            description: fullDescription,
-            usertimezone,
-            date:      dates,
-            starttime: startTimes,
-            endtime:   endTimes,
-            contactid,  
-            attachments: toArray(attachments),
-        });
+    res.status(201).json({
+      ticketuuid,
+      ticketnumber,
+      dynamicsIncidentId: null,
+    });
 
-        res.status(201).json({ ticketuuid, ticketnumber, dynamicsIncidentId });
+    syncToDynamics({
+      io,
+     entrauserid, 
+      token,
+      ticketuuid,
+      dynamicsAccountId,
+      userInfo,
+      title,
+      description: fullDescription,
+      usertimezone,
+      date: dates,
+      starttime: startTimes,
+      endtime: endTimes,
+      contactid,
+      attachments: toArray(attachments),
+    }).catch((err) => {
+      console.error("Background Dynamics sync failed:", err.message);
 
-    } catch (err) {
-        if (err.message) return res.status(400).json({ error: err.message });
-        res.status(500).json({ error: "Internal Server Error" });
-    }
+      io.to(entrauserid).emit("ticket:sync_failed", {
+        ticketuuid,
+        error: "Dynamics sync failed",
+      });
+    });
+  } catch (err) {
+    if (err.message) return res.status(400).json({ error: err.message });
+    res.status(500).json({ error: "Internal Server Error" });
+  }
 };
-
+    
 const syncToDynamics = async ({
-    token, ticketuuid, dynamicsAccountId,
+    io, token, entrauserid, ticketuuid, dynamicsAccountId,
     userInfo, title, description, usertimezone,
     date, starttime, endtime, contactid, attachments
 }) => {
@@ -773,7 +532,7 @@ const syncToDynamics = async ({
                 "Content-Type":     "application/json",
                 "OData-Version":    "4.0",
                 "OData-MaxVersion": "4.0",
-                Prefer: 'return=representation, odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
+               Prefer: 'return=representation, odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
             }
         }
     );
@@ -782,21 +541,36 @@ const syncToDynamics = async ({
     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
     const statusCode           = dynamicsRes.data?.statuscode   ?? null;
     const dynamicsStatus       = DYNAMICS_STATUSCODE_MAP[statusCode] ?? "New";
-    const sourceLabel          = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"]         ?? null;
-    const category             = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"] ?? null;
-    const duedate              = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"]        ?? null;
-    const priority             = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]      ?? null;
-    const ticketlifecycle      = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"]    ?? null;
+    // const sourceCode  = dynamicsRes.data?.ss_source ?? null;
+    const sourceLabel = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const category = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]  ?? null;
+    const duedate = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const priority = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]  ?? null;
+    const ticketlifecycle = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"] ?? null;
 
     console.log("Dynamics incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle });
 
-    if (dynamicsIncidentId) {
+   if (dynamicsIncidentId) {
         await client.query(
             "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
         );
 
-         const attachmentList = toArray(attachments);
+        const updated = await client.query(
+        "SELECT * FROM public.ticket_get($1, NULL, NULL)",
+        [ticketuuid]
+        );
+
+        if (io && entrauserid && updated.rows[0]) {
+        io.to(entrauserid).emit("ticket:synced", {
+            ticketuuid,
+            ticket: updated.rows[0],
+        });
+        console.log("[WS] Emitted ticket:synced to:", entrauserid);
+        }
+
+
+        const attachmentList = toArray(attachments);
         if (attachmentList.length > 0) {
             console.log(`[DYNAMICS] Syncing ${attachmentList.length} attachment(s) to incident ${dynamicsIncidentId}`);
             await Promise.all(
@@ -806,9 +580,236 @@ const syncToDynamics = async ({
             ).catch(err => console.error("[DYNAMICS] Attachment sync failed:", err.message));
         }
     }
-
-    return dynamicsIncidentId;
 };
+
+// const create_Ticket = async (req, res) => {
+//     try {
+//         const {
+//             entrauserid, entratenantid, title, description,
+//             date, starttime, endtime, usertimezone, officelocation,
+//             attachments, createdby, contactid,
+//         } = req.body;
+
+//         const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
+
+//         const dates      = toArray(date);
+//         const startTimes = toArray(starttime);
+//         const endTimes   = toArray(endtime);
+
+//         const fullDescription = buildDescriptionWithSchedule(
+//             description,
+//             dates,
+//             startTimes,
+//             endTimes,
+//             usertimezone
+//         );
+
+//         const [result, token, tenantResult, userResult] = await Promise.all([
+//             client.query(
+//                 "SELECT * FROM ticket_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+//                 [
+//                     entrauserid, entratenantid, title, fullDescription,
+//                     dates, startTimes, endTimes,
+//                     usertimezone, officelocation, toArray(attachments), createdby,
+//                 ]
+//             ),
+//             getDynamicsToken(),
+//             client.query(
+//                 "SELECT public.tenant_get_dynamicsaccountid($1) AS dynamicsaccountid",
+//                 [entratenantid]
+//             ),
+//             client.query(
+//                 "SELECT * FROM public.user_get_info($1)",
+//                 [entrauserid]
+//             ),
+//         ]);
+
+//         const { ticketuuid, ticketnumber } = result.rows[0];
+//         const dynamicsAccountId = tenantResult.rows[0]?.dynamicsaccountid ?? null;
+//         const userInfo          = userResult.rows[0] ?? {};
+
+//         const dynamicsIncidentId = await syncToDynamics({
+//             token, ticketuuid, dynamicsAccountId,
+//             userInfo, title,
+//             description: fullDescription,
+//             usertimezone,
+//             date:      dates,
+//             starttime: startTimes,
+//             endtime:   endTimes,
+//             contactid,  
+//             attachments: toArray(attachments),
+//         });
+
+//         res.status(201).json({ ticketuuid, ticketnumber, dynamicsIncidentId });
+
+//     } catch (err) {
+//         if (err.message) return res.status(400).json({ error: err.message });
+//         res.status(500).json({ error: "Internal Server Error" });
+//     }
+// };
+
+// const syncToDynamics = async ({
+//     token, ticketuuid, dynamicsAccountId,
+//     userInfo, title, description, usertimezone,
+//     date, starttime, endtime, contactid, attachments
+// }) => {
+
+//     const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
+
+//     const dynamicsPayload = {
+//         "title":             title,
+//         "description":       description,
+//         "ss_ticketcategory": 128,
+//         "ss_source":         19,
+//         "ss_timezone":       usertimezone ?? null,
+//     };
+
+//     const dates  = toArray(date);
+//     const starts = toArray(starttime);
+//     const ends   = toArray(endtime);
+
+//     if (dates.length > 0) {
+//         dynamicsPayload["ss_schedulestartdate"] = `${dates[0]}T${starts[0]}:00Z`;
+//         dynamicsPayload["ss_scheduleenddate"]   = `${dates[dates.length - 1]}T${ends[ends.length - 1]}:00Z`;
+//     }
+
+//     if (dynamicsAccountId) {
+//         dynamicsPayload["customerid_account@odata.bind"] = `/accounts(${dynamicsAccountId})`;
+//     }
+
+//     try {
+//         const ownerRes = await axios.get(
+//             `${process.env.DYNAMICS_URL}/api/data/v9.2/systemusers?$filter=internalemailaddress eq 'Joseph@SpartaServ.com'&$select=systemuserid`,
+//             {
+//                 headers: {
+//                     Authorization:      `Bearer ${token}`,
+//                     Accept:             "application/json",
+//                     "OData-Version":    "4.0",
+//                     "OData-MaxVersion": "4.0",
+//                 }
+//             }
+//         );
+//         const ownerId = ownerRes.data.value?.[0]?.systemuserid ?? null;
+//         if (ownerId) {
+//             dynamicsPayload["ownerid@odata.bind"] = `/systemusers(${ownerId})`;
+//             console.log("Owner resolved:", ownerId);
+//         } else {
+//             console.warn("Owner not found for Joseph@SpartaServ.com");
+//         }
+//     } catch (ownerErr) {
+//         console.error("Failed to resolve owner:", ownerErr.response?.data || ownerErr.message);
+//     }
+
+//     if (contactid) {
+//         dynamicsPayload["ss_Contact@odata.bind"] = `/contacts(${contactid})`;
+//     } else if (userInfo?.useremail) {
+//         try {
+//             const contactRes = await axios.get(
+//                 `${process.env.DYNAMICS_URL}/api/data/v9.2/contacts?$filter=emailaddress1 eq '${userInfo.useremail}'&$select=contactid`,
+//                 {
+//                     headers: {
+//                         Authorization:      `Bearer ${token}`,
+//                         Accept:             "application/json",
+//                         "OData-Version":    "4.0",
+//                         "OData-MaxVersion": "4.0",
+//                     }
+//                 }
+//             );
+
+//             let dynamicsContactId = contactRes.data.value?.[0]?.contactid ?? null;
+
+//             if (!dynamicsContactId) {
+//                 console.warn(`No Dynamics contact found for ${userInfo.useremail} — creating...`);
+
+//                 const nameParts = (userInfo.username ?? "").trim().split(/\s+/);
+//                 const firstname = nameParts.length > 1 ? nameParts[0] : null;
+//                 const lastname  = nameParts.length > 1 ? nameParts.slice(1).join(" ") : nameParts[0] ?? userInfo.useremail;
+
+//                 const createContactRes = await axios.post(
+//                     `${process.env.DYNAMICS_URL}/api/data/v9.2/contacts`,
+//                     {
+//                         emailaddress1: userInfo.useremail,
+//                         firstname:     firstname,
+//                         lastname:      lastname,
+//                         jobtitle:      userInfo.jobtitle      ?? null,
+//                         telephone1:    userInfo.businessphone ?? null,
+//                         mobilephone:   userInfo.mobilephone   ?? null,
+//                         department:    userInfo.department    ?? null,
+//                         ...(dynamicsAccountId && {
+//                             "parentcustomerid_account@odata.bind": `/accounts(${dynamicsAccountId})`
+//                         }),
+//                     },
+//                     {
+//                         headers: {
+//                             Authorization:      `Bearer ${token}`,
+//                             Accept:             "application/json",
+//                             "Content-Type":     "application/json",
+//                             "OData-Version":    "4.0",
+//                             "OData-MaxVersion": "4.0",
+//                             "Prefer":           "return=representation",
+//                         }
+//                     }
+//                 );
+
+//                 dynamicsContactId = createContactRes.data?.contactid ?? null;
+//                 console.log("Contact created in Dynamics:", dynamicsContactId);
+//             }
+
+//             if (dynamicsContactId) {
+//                 dynamicsPayload["ss_Contact@odata.bind"] = `/contacts(${dynamicsContactId})`;
+//             }
+
+//         } catch (contactErr) {
+//             console.error("Failed to resolve/create Dynamics contact:", contactErr.response?.data || contactErr.message);
+//         }
+//     }
+
+//     const dynamicsRes = await axios.post(
+//         `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents`,
+//         dynamicsPayload,
+//         {
+//             headers: {
+//                 Authorization:      `Bearer ${token}`,
+//                 Accept:             "application/json",
+//                 "Content-Type":     "application/json",
+//                 "OData-Version":    "4.0",
+//                 "OData-MaxVersion": "4.0",
+//                 Prefer: 'return=representation, odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
+//             }
+//         }
+//     );
+
+//     const dynamicsIncidentId   = dynamicsRes.data?.incidentid  ?? null;
+//     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
+//     const statusCode           = dynamicsRes.data?.statuscode   ?? null;
+//     const dynamicsStatus       = DYNAMICS_STATUSCODE_MAP[statusCode] ?? "New";
+//     const sourceLabel          = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"]         ?? null;
+//     const category             = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"] ?? null;
+//     const duedate              = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"]        ?? null;
+//     const priority             = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]      ?? null;
+//     const ticketlifecycle      = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"]    ?? null;
+
+//     console.log("Dynamics incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle });
+
+//     if (dynamicsIncidentId) {
+//         await client.query(
+//             "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+//             [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
+//         );
+
+//          const attachmentList = toArray(attachments);
+//         if (attachmentList.length > 0) {
+//             console.log(`[DYNAMICS] Syncing ${attachmentList.length} attachment(s) to incident ${dynamicsIncidentId}`);
+//             await Promise.all(
+//                 attachmentList.map(blobUrl =>
+//                     syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
+//                 )
+//             ).catch(err => console.error("[DYNAMICS] Attachment sync failed:", err.message));
+//         }
+//     }
+
+//     return dynamicsIncidentId;
+// };
 
 const syncUpdateToDynamics = async ({
     token, dynamicsIncidentId,
@@ -1523,6 +1524,44 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
     }
 };
 
+// const webhook_DynamicsTicketDelete = async (req, res) => {
+//     try {
+//         const body = req.body;
+
+//         if (!body) {
+//             return res.status(400).json({ error: "Empty request body" });
+//         }
+
+//         const incidentid = body?.PrimaryEntityId ?? null;
+
+//         if (!incidentid) {
+//             return res.status(400).json({ error: "Missing PrimaryEntityId in payload" });
+//         }
+
+//         await client.query(
+//             `SELECT public.ticket_webhook_delete($1)`,
+//             [incidentid]
+//         );
+
+//         console.log(`[WEBHOOK] Ticket deleted from DB: ${incidentid}`);
+//         return res.status(200).json({
+//             message:    "Ticket deleted successfully",
+//             incidentid,
+//         });
+
+//     } catch (err) {
+//         if (err.message?.includes('Ticket not found')) {
+//             return res.status(404).json({ error: err.message });
+//         }
+
+//         console.error("[WEBHOOK] Delete error:", err.message);
+//         return res.status(500).json({
+//             error:   "Failed to process Dynamics delete webhook",
+//             details: err.message,
+//         });
+//     }
+// };
+
 const webhook_DynamicsTicketDelete = async (req, res) => {
     try {
         const body = req.body;
@@ -1537,12 +1576,45 @@ const webhook_DynamicsTicketDelete = async (req, res) => {
             return res.status(400).json({ error: "Missing PrimaryEntityId in payload" });
         }
 
+        // Get ticket info BEFORE deleting so we know who to notify
+        const ticketInfoResult = await client.query(
+            `SELECT t.ticketid, u.entrauserid, tn.entratenantid, t.ticketuuid
+             FROM public.ticket t
+             LEFT JOIN "user" u ON t.userid = u.userid
+             LEFT JOIN tenant tn ON t.tenantid = tn.tenantid
+             WHERE t.dynamicsincidentid = $1`,
+            [incidentid]
+        );
+
+        const ticketInfo = ticketInfoResult.rows[0] ?? null;
+
         await client.query(
             `SELECT public.ticket_webhook_delete($1)`,
             [incidentid]
         );
 
         console.log(`[WEBHOOK] Ticket deleted from DB: ${incidentid}`);
+
+        // Emit socket event to affected user and tenant rooms
+        const io = req.app.get("io");
+        if (io && ticketInfo) {
+            const { entrauserid, entratenantid, ticketuuid } = ticketInfo;
+
+            const payload = { ticketuuid, dynamicsincidentid: incidentid };
+
+            // Notify the ticket owner
+            if (entrauserid) {
+                io.to(entrauserid).emit("ticket:deleted", payload);
+                console.log(`[WS] Emitted ticket:deleted to user: ${entrauserid}`);
+            }
+
+            // Notify everyone in the tenant room (managers, admins)
+            if (entratenantid) {
+                io.to(entratenantid).emit("ticket:deleted", payload);
+                console.log(`[WS] Emitted ticket:deleted to tenant: ${entratenantid}`);
+            }
+        }
+
         return res.status(200).json({
             message:    "Ticket deleted successfully",
             incidentid,
