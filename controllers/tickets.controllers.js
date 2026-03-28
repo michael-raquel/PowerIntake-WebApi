@@ -570,14 +570,44 @@ const syncToDynamics = async ({
         }
 
 
-        const attachmentList = toArray(attachments);
-        if (attachmentList.length > 0) {
-            console.log(`[DYNAMICS] Syncing ${attachmentList.length} attachment(s) to incident ${dynamicsIncidentId}`);
-            await Promise.all(
-                attachmentList.map(blobUrl =>
-                    syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
-                )
-            ).catch(err => console.error("[DYNAMICS] Attachment sync failed:", err.message));
+       const attachmentList = toArray(attachments);
+    if (attachmentList.length > 0) {
+        console.log(`[DYNAMICS] Syncing ${attachmentList.length} attachment(s) to incident ${dynamicsIncidentId}`);
+        console.log(`[DYNAMICS] Attachment URLs:`, attachmentList); // ✅ log what URLs are being used
+
+        const annotationIds = await Promise.all(
+            attachmentList.map(blobUrl =>
+                syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
+            )
+        ).catch(err => {
+            console.error("[DYNAMICS] Attachment sync failed:", err.message);
+            return [];
+        });
+
+        console.log(`[DYNAMICS] Returned annotationIds:`, annotationIds); // ✅ log returned IDs
+
+        for (let i = 0; i < attachmentList.length; i++) {
+            const annotationid = annotationIds[i];
+            const blobUrl      = attachmentList[i];
+
+            console.log(`[DYNAMICS] Saving annotationid: ${annotationid} for blobUrl: ${blobUrl}`); // ✅ log each save attempt
+
+            if (!annotationid) {
+                console.warn(`[DYNAMICS] No annotationid returned for index ${i}, skipping`);
+                continue;
+            }
+
+            try {
+                const updateResult = await client.query(
+                    `SELECT public.attachment_update_annotation($1, $2)`,
+                    [blobUrl, annotationid]
+                );
+                console.log(`[DYNAMICS] attachment_update_annotation result:`, updateResult.rowCount); // ✅ log rows affected
+                console.log(`[DYNAMICS] Attachment annotationid saved: ${annotationid} for ${blobUrl}`);
+            } catch (e) {
+                console.error(`[DYNAMICS] Failed to save annotationid for ${blobUrl}:`, e.message);
+            }
+        }
         }
     }
 };

@@ -107,16 +107,26 @@ const syncAttachmentToDynamics = async ({ token, dynamicsIncidentId, blobUrl }) 
             "objectid_incident@odata.bind": `/incidents(${dynamicsIncidentId})`,
         };
 
-        await axios.post(
+        const response = await axios.post(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`,
             payload,
             { headers: dynamicsHeaders(token) }
         );
 
-        console.log(`[DYNAMICS] Attachment synced: ${filename} → incident ${dynamicsIncidentId}`);
+        const entityUrl = response.headers["odata-entityid"] || response.headers["OData-EntityId"];
+        let annotationid = null;
+        if (entityUrl) {
+            const match = entityUrl.match(/\(([^)]+)\)/);
+            annotationid = match ? match[1] : null;
+        }
+
+        console.log(`[DYNAMICS] Attachment synced: ${filename} → incident ${dynamicsIncidentId}, annotationid: ${annotationid}`);
+
+        return annotationid; 
 
     } catch (err) {
         console.error(`[DYNAMICS] Attachment sync failed for ${blobUrl}:`, err.response?.data ?? err.message);
+        return null;
     }
 };
 
@@ -147,14 +157,26 @@ const create_Attachment = async (req, res) => {
         if (dynamicsIncidentId) {
             Promise.all(
                 attachmentArray.map(blobUrl =>
-                    syncAttachmentToDynamics({
-                        token,
-                        dynamicsIncidentId,
-                        blobUrl,
-                        // createdbyEmail: createdby,
-                    })
+                    syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
                 )
-            ).catch(err => console.error("[DYNAMICS] Attachment batch sync failed:", err.message));
+            ).then(async (annotationIds) => {
+                
+                for (let i = 0; i < attachmentArray.length; i++) {
+                    const annotationid = annotationIds[i];
+                    const blobUrl      = attachmentArray[i];
+                    if (!annotationid) continue;
+
+                    try {
+                        await client.query(
+                            `SELECT public.attachment_update_annotation($1, $2)`,
+                            [blobUrl, annotationid]
+                        );
+                        console.log(`[DYNAMICS] Attachment annotationid saved: ${annotationid}`);
+                    } catch (e) {
+                        console.error(`[DYNAMICS] Failed to save annotationid for ${blobUrl}:`, e.message);
+                    }
+                }
+            }).catch(err => console.error("[DYNAMICS] Attachment batch sync failed:", err.message));
         } else {
             console.warn(`[DYNAMICS] No dynamicsincidentid for ticketuuid: ${ticketuuid} — skipping attachment sync`);
         }
@@ -166,14 +188,62 @@ const create_Attachment = async (req, res) => {
     }
 };
 
+
+
+// const update_Attachment = async (req, res) => {
+//     try {
+//         const { ticketuuid, attachments, newAttachments, modifiedby } = req.body;
+
+//         const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
+
+//         const attachmentArray = toArray(attachments);
+//         const newAttachmentArray = toArray(newAttachments); 
+
+//         const [result, token, dynamicsResult] = await Promise.all([
+//             client.query(
+//                 "SELECT * FROM attachment_update($1, $2, $3)",
+//                 [ticketuuid, attachmentArray, modifiedby]
+//             ),
+//             getDynamicsToken(),
+//             client.query(
+//                 "SELECT public.ticket_get_dynamicsincidentid($1) AS dynamicsincidentid",
+//                 [ticketuuid]
+//             ),
+//         ]);
+
+//         const attachmentuuids = result.rows[0].attachment_update;
+//         res.status(200).json({ attachmentuuids });
+
+//         const dynamicsIncidentId = dynamicsResult.rows[0]?.dynamicsincidentid ?? null;
+
+//         if (dynamicsIncidentId && newAttachmentArray.length > 0) {
+//             for (const blobUrl of newAttachmentArray) {
+//                 try {
+//                     await syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl });
+//                 } catch (err) {
+//                     console.error("[DYNAMICS] Attachment sync failed:", blobUrl, err.response?.data ?? err.message);
+//                 }
+//             }
+//         } else {
+//             console.warn(`[DYNAMICS] No new attachments or no incident id — skipping`);
+//         }
+
+//     } catch (err) {
+//         console.error("update_Attachment error:", err.message);
+//         if (err.message) return res.status(400).json({ error: err.message });
+//         res.status(500).json({ error: "Internal Server Error" });
+//     }
+// };
+
 const update_Attachment = async (req, res) => {
     try {
-        const { ticketuuid, attachments, newAttachments, modifiedby } = req.body;
-
+        const { ticketuuid, attachments, newAttachments, removedAnnotationIds, modifiedby } = req.body;
+        console.log("[ATTACHMENT] removedAnnotationIds received:", removedAnnotationIds);
         const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
 
-        const attachmentArray = toArray(attachments);
-        const newAttachmentArray = toArray(newAttachments); 
+        const attachmentArray        = toArray(attachments);
+        const newAttachmentArray     = toArray(newAttachments);
+        const removedAnnotationArray = toArray(removedAnnotationIds); 
 
         const [result, token, dynamicsResult] = await Promise.all([
             client.query(
@@ -187,21 +257,47 @@ const update_Attachment = async (req, res) => {
             ),
         ]);
 
-        const attachmentuuids = result.rows[0].attachment_update;
-        res.status(200).json({ attachmentuuids });
-
+        const attachmentuuids    = result.rows[0].attachment_update;
         const dynamicsIncidentId = dynamicsResult.rows[0]?.dynamicsincidentid ?? null;
 
-        if (dynamicsIncidentId && newAttachmentArray.length > 0) {
-            for (const blobUrl of newAttachmentArray) {
-                try {
-                    await syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl });
-                } catch (err) {
-                    console.error("[DYNAMICS] Attachment sync failed:", blobUrl, err.response?.data ?? err.message);
+        res.status(200).json({ attachmentuuids });
+
+        if (dynamicsIncidentId) {
+
+            if (removedAnnotationArray.length > 0) {
+                for (const annotationid of removedAnnotationArray) {
+                    try {
+                        await axios.delete(
+                            `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})`,
+                            { headers: dynamicsHeaders(token) }
+                        );
+                        console.log(`[DYNAMICS] Annotation deleted: ${annotationid}`);
+                    } catch (err) {
+                        console.error(`[DYNAMICS] Failed to delete annotation ${annotationid}:`, err.response?.data ?? err.message);
+                    }
                 }
             }
+
+           if (newAttachmentArray.length > 0) {
+                for (const blobUrl of newAttachmentArray) {
+                    try {
+                        const annotationid = await syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl });
+
+                        if (annotationid) {
+                            await client.query(
+                                `SELECT public.attachment_update_annotation($1, $2)`,
+                                [blobUrl, annotationid]
+                            );
+                            console.log(`[DYNAMICS] Attachment annotationid saved: ${annotationid}`);
+                        }
+                    } catch (err) {
+                        console.error("[DYNAMICS] Attachment sync failed:", blobUrl, err.response?.data ?? err.message);
+                    }
+                }
+            }
+
         } else {
-            console.warn(`[DYNAMICS] No new attachments or no incident id — skipping`);
+            console.warn(`[DYNAMICS] No incident id for ticketuuid: ${ticketuuid} — skipping`);
         }
 
     } catch (err) {

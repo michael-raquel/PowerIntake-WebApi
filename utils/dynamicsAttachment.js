@@ -39,15 +39,26 @@ const syncAttachmentToDynamics = async ({ token, dynamicsIncidentId, blobUrl }) 
             "objectid_incident@odata.bind": `/incidents(${dynamicsIncidentId})`,
         };
 
-        await axios.post(
+        const response = await axios.post( 
             `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`,
             payload,
             { headers: dynamicsHeaders(token) }
         );
 
-        console.log(`[DYNAMICS] Attachment synced: ${filename} → incident ${dynamicsIncidentId}`);
+        const entityUrl = response.headers["odata-entityid"] || response.headers["OData-EntityId"];
+        let annotationid = null;
+        if (entityUrl) {
+            const match = entityUrl.match(/\(([^)]+)\)/);
+            annotationid = match ? match[1] : null;
+        }
+
+        console.log(`[DYNAMICS] Attachment synced: ${filename} → incident ${dynamicsIncidentId}, annotationid: ${annotationid}`);
+
+        return annotationid; 
+
     } catch (err) {
         console.error(`[DYNAMICS] Attachment sync failed for ${blobUrl}:`, err.response?.data ?? err.message);
+        return null; 
     }
 };
 
