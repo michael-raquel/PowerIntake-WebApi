@@ -656,6 +656,83 @@ const sync_AllTenantUsers = async (req, res) => {
   }
 };
 
+const create_user_onlogin = async (req, res) => {
+  try {
+
+    const entraUserId = req.user?.oid || req.user?.sub;
+    const tenantId    = req.user?.tid;
+    const displayName = req.user?.name                ?? null;
+    const email       = req.user?.preferred_username  ?? req.user?.email ?? null;
+    const roles       = req.user?.roles               ?? [];
+    const userRole    = roles.length > 0 ? roles[0] : "User";
+
+    if (!entraUserId || !tenantId) {
+      return res.status(400).json({ error: "Invalid token: missing user or tenant ID" });
+    }
+
+    const existingUser = await client.query(
+      `SELECT * FROM public.user_get_info($1)`,
+      [entraUserId]
+    );
+
+    const existingRow = existingUser.rows[0];
+    if (existingRow?.v_entrauserid) {
+      return res.status(200).json({
+        message: "User already exists",
+        user: existingRow,
+      });
+    }
+
+    const tenantCheck = await client.query(
+      `SELECT * FROM public.tenant_get() WHERE v_entratenantid = $1`,
+      [tenantId]
+    );
+
+    if (tenantCheck.rows.length === 0) {
+      return res.status(403).json({
+        error: "Access denied: your organization is not registered in this system.",
+      });
+    }
+
+    const tenant = tenantCheck.rows[0];
+
+    await client.query(
+      `SELECT public.user_create_onlogin($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [
+        entraUserId,          // $1  user entra id
+        tenantId,             // $2  tenant entra id
+        displayName,          // $3  display name from token
+        null,                 // $4  jobTitle — not in token, skip for now
+        null,                 // $5  businessPhone — not in token, skip for now
+        email,                // $6  email from token
+        null,                 // $7  department — not in token, skip for now
+        null,                 // $8  mobilePhone — not in token, skip for now
+        new Date().toISOString(), // $9 createdDateTime
+        tenant.v_tenantname,  // $10 tenant name from DB
+        tenant.v_tenantemail, // $11 tenant email from DB
+        userRole,             // $12 role from token claims
+        "true",               // $13 accountEnabled — if they can log in, they're enabled
+      ]
+    );
+
+    const newUser = await client.query(
+      `SELECT * FROM public.user_get_info($1)`,
+      [entraUserId]
+    );
+
+    return res.status(200).json({
+      message: "User created on login",
+      user: newUser.rows[0],
+    });
+
+  } catch (err) {
+    console.error("[LOGIN SYNC ERROR]:", err.message);
+    if (err.response) return res.status(err.response.status).json({ error: err.response.data?.error?.message });
+    if (err.request)  return res.status(504).json({ error: "No response from Microsoft Graph" });
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 module.exports = {
   get_AllUsers,
   get_UserById,
@@ -670,4 +747,5 @@ module.exports = {
   update_UserRole,
   sync_Users,
   sync_AllTenantUsers,
+  create_user_onlogin
 };

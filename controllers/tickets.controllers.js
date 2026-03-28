@@ -291,73 +291,100 @@ const buildDescriptionWithSchedule = (description, dates, startTimes, endTimes, 
 };
 
 const create_Ticket = async (req, res) => {
-    try {
-        const {
-            entrauserid, entratenantid, title, description,
-            date, starttime, endtime, usertimezone, officelocation,
-            attachments, createdby, contactid,
-        } = req.body;
+  try {
+    const {
+      entrauserid,
+      entratenantid,
+      title,
+      description,
+      date,
+      starttime,
+      endtime,
+      usertimezone,
+      officelocation,
+      attachments,
+      createdby,
+      contactid,
+    } = req.body;
 
-        const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
+    const io = req.app.get("io");
 
-        const dates      = toArray(date);
-        const startTimes = toArray(starttime);
-        const endTimes   = toArray(endtime);
+    const toArray = (val) => (Array.isArray(val) ? val : val ? [val] : []);
+    const dates = toArray(date);
+    const startTimes = toArray(starttime);
+    const endTimes = toArray(endtime);
 
-        const fullDescription = buildDescriptionWithSchedule(
-            description,
-            dates,
-            startTimes,
-            endTimes,
-            usertimezone
-        );
+    const fullDescription = buildDescriptionWithSchedule(
+      description,
+      dates,
+      startTimes,
+      endTimes,
+      usertimezone
+    );
 
-        const [result, token, tenantResult, userResult] = await Promise.all([
-            client.query(
-                "SELECT * FROM ticket_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-                [
-                    entrauserid, entratenantid, title, fullDescription,  
-                    dates, startTimes, endTimes,
-                    usertimezone, officelocation, toArray(attachments), createdby,
-                ]
-            ),
-            getDynamicsToken(),
-            client.query(
-                "SELECT public.tenant_get_dynamicsaccountid($1) AS dynamicsaccountid",
-                [entratenantid]
-            ),
-            client.query(
-                "SELECT * FROM public.user_get_info($1)",
-                [entrauserid]
-            ),
-        ]);
+    const [result, token, tenantResult, userResult] = await Promise.all([
+      client.query(
+        "SELECT * FROM ticket_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+        [
+          entrauserid,
+          entratenantid,
+          title,
+          fullDescription,
+          dates,
+          startTimes,
+          endTimes,
+          usertimezone,
+          officelocation,
+          toArray(attachments),
+          createdby,
+        ]
+      ),
+      getDynamicsToken(),
+      client.query(
+        "SELECT public.tenant_get_dynamicsaccountid($1) AS dynamicsaccountid",
+        [entratenantid]
+      ),
+      client.query("SELECT * FROM public.user_get_info($1)", [entrauserid]),
+    ]);
 
-        const { ticketuuid, ticketnumber } = result.rows[0];
-        const dynamicsAccountId = tenantResult.rows[0]?.dynamicsaccountid ?? null;
-        const userInfo          = userResult.rows[0] ?? {};
+    const { ticketuuid, ticketnumber } = result.rows[0];
+    const dynamicsAccountId =
+      tenantResult.rows[0]?.dynamicsaccountid ?? null;
+    const userInfo = userResult.rows[0] ?? {};
 
-        res.status(201).json({ ticketuuid, ticketnumber, dynamicsIncidentId: null });
+    res.status(201).json({
+      ticketuuid,
+      ticketnumber,
+      dynamicsIncidentId: null,
+    });
 
-        syncToDynamics({
-            token, ticketuuid, dynamicsAccountId,
-            userInfo,
-            title,
-            description: fullDescription,
-            usertimezone,
-            date:        dates,
-            starttime:   startTimes,
-            endtime:     endTimes,
-            contactid,
-            attachments: toArray(attachments), 
-        }).catch(err => {
-            console.error("Background Dynamics sync failed:", err.message);
-            console.error("Details:", JSON.stringify(err.response?.data, null, 2));
-        });
+    syncToDynamics({
+      io,
+     entrauserid, 
+      token,
+      ticketuuid,
+      dynamicsAccountId,
+      userInfo,
+      title,
+      description: fullDescription,
+      usertimezone,
+      date: dates,
+      starttime: startTimes,
+      endtime: endTimes,
+      contactid,
+      attachments: toArray(attachments),
+    }).catch((err) => {
+      console.error("Background Dynamics sync failed:", err.message);
 
-    } catch (err) {
-        if (err.message) return res.status(400).json({ error: err.message });
-        res.status(500).json({ error: "Internal Server Error" });
-    }
+      io.to(entrauserid).emit("ticket:sync_failed", {
+        ticketuuid,
+        error: "Dynamics sync failed",
+      });
+    });
+  } catch (err) {
+    if (err.message) return res.status(400).json({ error: err.message });
+    res.status(500).json({ error: "Internal Server Error" });
+  }
 };
 
     const DYNAMICS_STATUSCODE_MAP = {
@@ -379,8 +406,9 @@ const create_Ticket = async (req, res) => {
         196780008: "New",
     };
 
+    
 const syncToDynamics = async ({
-    token, ticketuuid, dynamicsAccountId,
+    io, token, entrauserid, ticketuuid, dynamicsAccountId,
     userInfo, title, description, usertimezone,
     date, starttime, endtime, contactid, attachments
 }) => {
@@ -527,6 +555,20 @@ const syncToDynamics = async ({
             "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
         );
+
+        const updated = await client.query(
+        "SELECT * FROM public.ticket_get($1, NULL, NULL)",
+        [ticketuuid]
+        );
+
+        if (io && entrauserid && updated.rows[0]) {
+        io.to(entrauserid).emit("ticket:synced", {
+            ticketuuid,
+            ticket: updated.rows[0],
+        });
+        console.log("[WS] Emitted ticket:synced to:", entrauserid);
+        }
+
 
         const attachmentList = toArray(attachments);
         if (attachmentList.length > 0) {

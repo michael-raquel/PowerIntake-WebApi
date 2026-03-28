@@ -1,20 +1,20 @@
-
-//auragrabe
-
-const express = require('express');
-const dotenv = require('dotenv');
+const express    = require('express');
+const http       = require('http');
+const { Server } = require('socket.io');
+const dotenv     = require('dotenv');
 dotenv.config();
 
 const setupSwagger = require('./swagger');
-const cors = require('cors');
+const cors         = require('cors');
 
-const app = express();
+const app    = express();
+const server = http.createServer(app); 
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [];
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true); 
+    if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -25,8 +25,30 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'x-webhook-secret'],
 }));
 
-app.use(express.json());  
-setupSwagger(app);        
+app.use(express.json());
+setupSwagger(app);
+
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ['GET', 'POST'],
+  },
+});
+
+app.set("io", io);
+
+io.on("connection", (socket) => {
+  console.log("[WS] Client connected:", socket.id);
+
+  socket.on("join", (entrauserid) => {
+    socket.join(entrauserid);
+    console.log(`[WS] ${entrauserid} joined their room`);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("[WS] Client disconnected:", socket.id);
+  });
+});
 
 const roles = require('./routes/roles.routes');
 app.use('/roles', roles);
@@ -50,7 +72,7 @@ const synctickets = require("./routes/synctickets.routes");
 app.use("/synctickets", synctickets);
 
 const usersettings = require('./routes/usersettings.routes');
-app.use('/usersettings', usersettings);   
+app.use('/usersettings', usersettings);
 
 const attachments = require("./routes/attachments.routes");
 app.use("/attachments", attachments);
@@ -58,21 +80,17 @@ app.use("/attachments", attachments);
 const notes = require("./routes/notes.routes");
 app.use("/notes", notes);
 
-
 const PORT = process.env.PORT;
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Server is running on port http://localhost:${PORT}`);
 
-
   if (process.env.ENABLE_CRON.toLowerCase() === 'true') {
-
     require('./controllers/scheduler');
     console.log('[CRON] Scheduler ENABLED');
-
   } else {
     console.log('[CRON] Scheduler DISABLED (local)');
   }
 });
 
-module.exports = app;
+module.exports = { app, server, io };
