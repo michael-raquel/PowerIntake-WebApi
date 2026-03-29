@@ -309,7 +309,6 @@ const buildDescriptionWithSchedule = (description, dates, startTimes, endTimes, 
         196780008: "New",
     };
 
-
 const create_Ticket = async (req, res) => {
   try {
     const {
