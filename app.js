@@ -50,6 +50,9 @@ io.on("connection", (socket) => {
   });
 });
 
+const consent = require("./routes/consent.routes");
+app.use("/consent", consent);
+
 const roles = require('./routes/roles.routes');
 app.use('/roles', roles);
 

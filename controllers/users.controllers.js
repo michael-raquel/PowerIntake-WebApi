@@ -35,7 +35,7 @@ const USER_FIELDS = [
 
 const get_AllUsers = async (req, res) => {
   try {
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
     const headers = { Authorization: `Bearer ${token}` };
 
     let users = [];
@@ -75,7 +75,7 @@ const get_UserById = async (req, res) => {
   try {
     const { id } = req.query;
     const response = await axios.get(`${GRAPH_URL}/users/${id}`, {
-      headers: { Authorization: `Bearer ${await getAccessToken()}` },
+      headers: { Authorization: `Bearer ${await getAccessToken(req.tenantId)}` },
       params: { $select: USER_FIELDS },
     });
 
@@ -90,7 +90,7 @@ const get_UserManager = async (req, res) => {
     const { id } = req.query;
     const response = await axios.get(
       `${GRAPH_URL}/users/${id}/manager`,
-      { headers: { Authorization: `Bearer ${await getAccessToken()}` } }
+      { headers: { Authorization: `Bearer ${await getAccessToken(req.tenantId)}` } }
     );
 
     res.status(200).json(response.data);
@@ -105,7 +105,7 @@ const get_UserDirectReports = async (req, res) => {
     const { id } = req.query;
     const response = await axios.get(
       `${GRAPH_URL}/users/${id}/directReports`,
-      { headers: { Authorization: `Bearer ${await getAccessToken()}` } }
+      { headers: { Authorization: `Bearer ${await getAccessToken(req.tenantId)}` } }
     );
 
     res.status(200).json({
@@ -120,7 +120,7 @@ const get_UserDirectReports = async (req, res) => {
 const get_UserFullProfile = async (req, res) => {
   try {
     const { id } = req.query;
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
     const headers = { Authorization: `Bearer ${token}` };
 
     const [userRes, managerRes, reportsRes] = await Promise.allSettled([
@@ -142,7 +142,7 @@ const get_UserFullProfile = async (req, res) => {
 
 const get_AllUsersWithDetails = async (req, res) => {
   try {
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
     const headers = { Authorization: `Bearer ${token}` };
 
     const usersRes = await axios.get(`${GRAPH_URL}/users`, {
@@ -205,7 +205,7 @@ const get_AllUsersWithDetails = async (req, res) => {
 const get_UserGroups = async (req, res) => {
   try {
     const { id } = req.query;
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
     const headers = { Authorization: `Bearer ${token}` };
 
     const [directRes, transitiveRes] = await Promise.allSettled([
@@ -246,7 +246,7 @@ const get_UserAppRoleAssignments = async (req, res) => {
   try {
     const { id } = req.query;
     const response = await axios.get(`${GRAPH_URL}/users/${id}/appRoleAssignments`, {
-      headers: { Authorization: `Bearer ${await getAccessToken()}` },
+      headers: { Authorization: `Bearer ${await getAccessToken(req.tenantId)}` },
       params: { $select: 'id,appRoleId,resourceId,resourceDisplayName,principalId' },
     });
 
@@ -421,7 +421,7 @@ const fetchManagersBatch = async (users, headers) => {
 
 const sync_Users = async (req, res) => {
     try {
-        const token   = await getAccessToken();
+        const token   = await getAccessToken(req.tenantId);
         const headers = { Authorization: `Bearer ${token}` };
 
         const orgRes            = await axios.get(`${GRAPH_URL}/organization`, { headers });
@@ -546,10 +546,8 @@ const sync_AllTenantUsers = async (req, res) => {
             scope:         "https://graph.microsoft.com/.default",
           })
         );
-
-        const token = tokenRes.data.access_token;
+        const token   = await getAccessToken(tenant.v_entratenantid); // yours, their tenantId
         const headers = { Authorization: `Bearer ${token}` };
-
         let graphUsers = [];
         let nextLink = `${GRAPH_URL}/users?$select=${USER_FIELDS}&$top=999`;
 
@@ -564,7 +562,9 @@ const sync_AllTenantUsers = async (req, res) => {
           continue;
         }
 
-        const existingResult = await client.query("SELECT * FROM public.user_email_get()");
+        const existingResult = await client.query(
+          "SELECT * FROM public.user_email_get()"
+        );
         const existingEmails = new Set(existingResult.rows.map((r) => r.v_useremail));
 
         const newUsers = graphUsers.filter((user) => {
