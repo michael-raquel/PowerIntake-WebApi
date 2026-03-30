@@ -607,235 +607,6 @@ const syncToDynamics = async ({
     }
 };
 
-// const create_Ticket = async (req, res) => {
-//     try {
-//         const {
-//             entrauserid, entratenantid, title, description,
-//             date, starttime, endtime, usertimezone, officelocation,
-//             attachments, createdby, contactid,
-//         } = req.body;
-
-//         const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
-
-//         const dates      = toArray(date);
-//         const startTimes = toArray(starttime);
-//         const endTimes   = toArray(endtime);
-
-//         const fullDescription = buildDescriptionWithSchedule(
-//             description,
-//             dates,
-//             startTimes,
-//             endTimes,
-//             usertimezone
-//         );
-
-//         const [result, token, tenantResult, userResult] = await Promise.all([
-//             client.query(
-//                 "SELECT * FROM ticket_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-//                 [
-//                     entrauserid, entratenantid, title, fullDescription,
-//                     dates, startTimes, endTimes,
-//                     usertimezone, officelocation, toArray(attachments), createdby,
-//                 ]
-//             ),
-//             getDynamicsToken(),
-//             client.query(
-//                 "SELECT public.tenant_get_dynamicsaccountid($1) AS dynamicsaccountid",
-//                 [entratenantid]
-//             ),
-//             client.query(
-//                 "SELECT * FROM public.user_get_info($1)",
-//                 [entrauserid]
-//             ),
-//         ]);
-
-//         const { ticketuuid, ticketnumber } = result.rows[0];
-//         const dynamicsAccountId = tenantResult.rows[0]?.dynamicsaccountid ?? null;
-//         const userInfo          = userResult.rows[0] ?? {};
-
-//         const dynamicsIncidentId = await syncToDynamics({
-//             token, ticketuuid, dynamicsAccountId,
-//             userInfo, title,
-//             description: fullDescription,
-//             usertimezone,
-//             date:      dates,
-//             starttime: startTimes,
-//             endtime:   endTimes,
-//             contactid,  
-//             attachments: toArray(attachments),
-//         });
-
-//         res.status(201).json({ ticketuuid, ticketnumber, dynamicsIncidentId });
-
-//     } catch (err) {
-//         if (err.message) return res.status(400).json({ error: err.message });
-//         res.status(500).json({ error: "Internal Server Error" });
-//     }
-// };
-
-// const syncToDynamics = async ({
-//     token, ticketuuid, dynamicsAccountId,
-//     userInfo, title, description, usertimezone,
-//     date, starttime, endtime, contactid, attachments
-// }) => {
-
-//     const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
-
-//     const dynamicsPayload = {
-//         "title":             title,
-//         "description":       description,
-//         "ss_ticketcategory": 128,
-//         "ss_source":         19,
-//         "ss_timezone":       usertimezone ?? null,
-//     };
-
-//     const dates  = toArray(date);
-//     const starts = toArray(starttime);
-//     const ends   = toArray(endtime);
-
-//     if (dates.length > 0) {
-//         dynamicsPayload["ss_schedulestartdate"] = `${dates[0]}T${starts[0]}:00Z`;
-//         dynamicsPayload["ss_scheduleenddate"]   = `${dates[dates.length - 1]}T${ends[ends.length - 1]}:00Z`;
-//     }
-
-//     if (dynamicsAccountId) {
-//         dynamicsPayload["customerid_account@odata.bind"] = `/accounts(${dynamicsAccountId})`;
-//     }
-
-//     try {
-//         const ownerRes = await axios.get(
-//             `${process.env.DYNAMICS_URL}/api/data/v9.2/systemusers?$filter=internalemailaddress eq 'Joseph@SpartaServ.com'&$select=systemuserid`,
-//             {
-//                 headers: {
-//                     Authorization:      `Bearer ${token}`,
-//                     Accept:             "application/json",
-//                     "OData-Version":    "4.0",
-//                     "OData-MaxVersion": "4.0",
-//                 }
-//             }
-//         );
-//         const ownerId = ownerRes.data.value?.[0]?.systemuserid ?? null;
-//         if (ownerId) {
-//             dynamicsPayload["ownerid@odata.bind"] = `/systemusers(${ownerId})`;
-//             console.log("Owner resolved:", ownerId);
-//         } else {
-//             console.warn("Owner not found for Joseph@SpartaServ.com");
-//         }
-//     } catch (ownerErr) {
-//         console.error("Failed to resolve owner:", ownerErr.response?.data || ownerErr.message);
-//     }
-
-//     if (contactid) {
-//         dynamicsPayload["ss_Contact@odata.bind"] = `/contacts(${contactid})`;
-//     } else if (userInfo?.useremail) {
-//         try {
-//             const contactRes = await axios.get(
-//                 `${process.env.DYNAMICS_URL}/api/data/v9.2/contacts?$filter=emailaddress1 eq '${userInfo.useremail}'&$select=contactid`,
-//                 {
-//                     headers: {
-//                         Authorization:      `Bearer ${token}`,
-//                         Accept:             "application/json",
-//                         "OData-Version":    "4.0",
-//                         "OData-MaxVersion": "4.0",
-//                     }
-//                 }
-//             );
-
-//             let dynamicsContactId = contactRes.data.value?.[0]?.contactid ?? null;
-
-//             if (!dynamicsContactId) {
-//                 console.warn(`No Dynamics contact found for ${userInfo.useremail} — creating...`);
-
-//                 const nameParts = (userInfo.username ?? "").trim().split(/\s+/);
-//                 const firstname = nameParts.length > 1 ? nameParts[0] : null;
-//                 const lastname  = nameParts.length > 1 ? nameParts.slice(1).join(" ") : nameParts[0] ?? userInfo.useremail;
-
-//                 const createContactRes = await axios.post(
-//                     `${process.env.DYNAMICS_URL}/api/data/v9.2/contacts`,
-//                     {
-//                         emailaddress1: userInfo.useremail,
-//                         firstname:     firstname,
-//                         lastname:      lastname,
-//                         jobtitle:      userInfo.jobtitle      ?? null,
-//                         telephone1:    userInfo.businessphone ?? null,
-//                         mobilephone:   userInfo.mobilephone   ?? null,
-//                         department:    userInfo.department    ?? null,
-//                         ...(dynamicsAccountId && {
-//                             "parentcustomerid_account@odata.bind": `/accounts(${dynamicsAccountId})`
-//                         }),
-//                     },
-//                     {
-//                         headers: {
-//                             Authorization:      `Bearer ${token}`,
-//                             Accept:             "application/json",
-//                             "Content-Type":     "application/json",
-//                             "OData-Version":    "4.0",
-//                             "OData-MaxVersion": "4.0",
-//                             "Prefer":           "return=representation",
-//                         }
-//                     }
-//                 );
-
-//                 dynamicsContactId = createContactRes.data?.contactid ?? null;
-//                 console.log("Contact created in Dynamics:", dynamicsContactId);
-//             }
-
-//             if (dynamicsContactId) {
-//                 dynamicsPayload["ss_Contact@odata.bind"] = `/contacts(${dynamicsContactId})`;
-//             }
-
-//         } catch (contactErr) {
-//             console.error("Failed to resolve/create Dynamics contact:", contactErr.response?.data || contactErr.message);
-//         }
-//     }
-
-//     const dynamicsRes = await axios.post(
-//         `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents`,
-//         dynamicsPayload,
-//         {
-//             headers: {
-//                 Authorization:      `Bearer ${token}`,
-//                 Accept:             "application/json",
-//                 "Content-Type":     "application/json",
-//                 "OData-Version":    "4.0",
-//                 "OData-MaxVersion": "4.0",
-//                 Prefer: 'return=representation, odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
-//             }
-//         }
-//     );
-
-//     const dynamicsIncidentId   = dynamicsRes.data?.incidentid  ?? null;
-//     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
-//     const statusCode           = dynamicsRes.data?.statuscode   ?? null;
-//     const dynamicsStatus       = DYNAMICS_STATUSCODE_MAP[statusCode] ?? "New";
-//     const sourceLabel          = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"]         ?? null;
-//     const category             = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"] ?? null;
-//     const duedate              = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"]        ?? null;
-//     const priority             = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]      ?? null;
-//     const ticketlifecycle      = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"]    ?? null;
-
-//     console.log("Dynamics incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle });
-
-//     if (dynamicsIncidentId) {
-//         await client.query(
-//             "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-//             [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
-//         );
-
-//          const attachmentList = toArray(attachments);
-//         if (attachmentList.length > 0) {
-//             console.log(`[DYNAMICS] Syncing ${attachmentList.length} attachment(s) to incident ${dynamicsIncidentId}`);
-//             await Promise.all(
-//                 attachmentList.map(blobUrl =>
-//                     syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
-//                 )
-//             ).catch(err => console.error("[DYNAMICS] Attachment sync failed:", err.message));
-//         }
-//     }
-
-//     return dynamicsIncidentId;
-// };
-
 const syncUpdateToDynamics = async ({
     token, dynamicsIncidentId,
     title, description, usertimezone,
@@ -1722,12 +1493,12 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 [incidentid]
             );
 
-            const ticketid = ticketRes.rows[0]?.ticketid ?? null;
+            const ticketid  = ticketRes.rows[0]?.ticketid ?? null;
             const createdby = note.createdby?.internalemailaddress ?? null;
 
             const results = {
                 annotationid,
-                note: false,
+                note:       false,
                 attachment: false,
             };
 
@@ -1737,7 +1508,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                     [
                         note.annotationid,
                         ticketid,
-                        note.notetext ?? null,
+                        note.notetext  ?? null,
                         note.createdon ?? null,
                         note.modifiedon ?? null,
                         createdby,
@@ -1745,34 +1516,63 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 );
 
                 results.note = true;
-
-                console.log(
-                    `[WEBHOOK] Note synced (${messageName}): ${annotationid}`
-                );
+                console.log(`[WEBHOOK] Note synced (${messageName}): ${annotationid}`);
             }
 
             if (note.isdocument && note.documentbody && note.filename) {
+                try {
+                    const buffer   = Buffer.from(note.documentbody, "base64");
+                    const mimetype = note.mimetype || "application/octet-stream";
+                    const blobName = `${uuidv4()}-${note.filename}`;
 
-                const base64 = note.documentbody; 
-                const mimetype = note.mimetype || "application/octet-stream";
-                const filename = note.filename;
+                    const blobServiceClient = BlobServiceClient.fromConnectionString(
+                        process.env.AZURE_STORAGE_CONNECTION_STRING
+                    );
+                    const containerClient = blobServiceClient.getContainerClient(
+                        process.env.AZURE_STORAGE_CONTAINER || "images"
+                    );
+                    await containerClient.createIfNotExists();
 
-                await client.query(
-                    `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
-                    [
-                        note.annotationid,
-                        ticketid,
-                        base64,
-                        note.createdon ?? null,
-                        createdby,
-                    ]
-                );
+                    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+                    await blockBlobClient.uploadData(buffer, {
+                        blobHTTPHeaders: { blobContentType: mimetype },
+                    });
 
-                results.attachment = true;
+                    const sharedKeyCredential = new StorageSharedKeyCredential(
+                        process.env.AZURE_STORAGE_ACCOUNT_NAME,
+                        process.env.AZURE_STORAGE_ACCOUNT_KEY
+                    );
+                    const sasToken = generateBlobSASQueryParameters(
+                        {
+                            containerName: process.env.AZURE_STORAGE_CONTAINER || "images",
+                            blobName,
+                            permissions: BlobSASPermissions.parse("r"),
+                            startsOn:  new Date(),
+                            expiresOn: new Date(new Date().valueOf() + 365 * 24 * 60 * 60 * 1000),
+                        },
+                        sharedKeyCredential
+                    ).toString();
 
-                console.log(
-                    `[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${filename}`
-                );
+                    const blobUrl = `https://${process.env.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${process.env.AZURE_STORAGE_CONTAINER || "images"}/${blobName}?${sasToken}`;
+
+                    await client.query(
+                        `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
+                        [
+                            note.annotationid,
+                            ticketid,
+                            blobUrl,          
+                            note.createdon ?? null,
+                            createdby,
+                        ]
+                    );
+
+                    results.attachment = true;
+                    console.log(`[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${note.filename}`);
+
+                } catch (attachErr) {
+                    console.error(`[WEBHOOK] Attachment upload failed for ${annotationid}:`, attachErr.message);
+            
+                }
             }
 
             return res.status(200).json({
@@ -1787,7 +1587,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
 
     } catch (err) {
         const status = err.response?.status;
-        const data = err.response?.data;
+        const data   = err.response?.data;
 
         console.error("[WEBHOOK] Note sync error:", {
             message: err.message,
@@ -1796,9 +1596,9 @@ const webhook_DynamicsNoteSync = async (req, res) => {
         });
 
         return res.status(status || 500).json({
-            error: "Failed to process Dynamics note webhook",
-            details: err.message,
-            dynamicsStatus: status || null,
+            error:           "Failed to process Dynamics note webhook",
+            details:         err.message,
+            dynamicsStatus:  status || null,
             dynamicsResponse: data || null,
         });
     }

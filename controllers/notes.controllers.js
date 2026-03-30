@@ -31,63 +31,6 @@ const get_Note = async (req, res) => {
   }
 };
 
-// const syncNoteToDynamics = async ({ token, dynamicsIncidentId, note, createdbyEmail }) => {
-//     const payload = {
-//         subject: "Client Note",
-//         notetext: note,
-//         "objectid_incident@odata.bind": `/incidents(${dynamicsIncidentId})`,
-//     };
-
-//     let callerObjectId = null;
-
-//     if (createdbyEmail) {
-//         try {
-//             const userRes = await axios.get(
-//                 `${process.env.DYNAMICS_URL}/api/data/v9.2/systemusers?$filter=azureactivedirectoryobjectid eq '${createdbyEmail}'&$select=systemuserid,azureactivedirectoryobjectid`,
-//                 {
-//                     headers: {
-//                         Authorization: `Bearer ${token}`,
-//                         Accept: "application/json",
-//                         "OData-Version": "4.0",
-//                         "OData-MaxVersion": "4.0",
-//                     },
-//                 }
-//             );
-
-//             callerObjectId = userRes.data.value?.[0]?.azureactivedirectoryobjectid ?? null;
-
-//         } catch (userErr) {
-//             console.warn(`[DYNAMICS] User resolve failed:`, userErr.message);
-//         }
-//     }
-
-//     const headers = {
-//         ...dynamicsHeaders(token),
-//         ...(callerObjectId ? { CallerObjectId: callerObjectId } : {}),
-//     };
-
-//     const response = await axios.post(
-//         `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`,
-//         payload,
-//         { headers }
-//     );
-
-//     const entityUrl =
-//         response.headers["odata-entityid"] ||
-//         response.headers["OData-EntityId"];
-
-//     let annotationid = null;
-
-//     if (entityUrl) {
-//         const match = entityUrl.match(/\(([^)]+)\)/);
-//         annotationid = match ? match[1] : null;
-//     }
-
-//     console.log("[DYNAMICS] annotationid:", annotationid);
-
-//     return annotationid;
-// };
-
 const syncNoteToDynamics = async ({ token, dynamicsIncidentId, note }) => {
     const payload = {
         subject: "Client Note",
