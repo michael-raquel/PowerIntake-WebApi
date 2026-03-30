@@ -93,8 +93,69 @@ const update_UserSettings = async (req, res) => {
     }
 };
  
+const update_UserSettings_RecordCounts = async (req, res) => {
+    try {
+        const {
+            entrauserid,
+            ticketrecordcount,
+            managerecordcount,
+            modifiedby,
+        } = req.body;
+
+        if (!entrauserid) {
+            return res.status(400).json({ error: "entrauserid is required" });
+        }
+
+        await client.query(
+            "SELECT public.user_settings_record_counts_update($1, $2, $3, $4)",
+            [
+                entrauserid,
+                ticketrecordcount,
+                managerecordcount,
+                modifiedby,
+            ]
+        );
+
+        return res.status(200).json({ message: "Record counts updated successfully" });
+    } catch (err) {
+        console.error("update_UserSettings_RecordCounts error:", err.message);
+
+        if (err.message) {
+            return res.status(400).json({ error: err.message });
+        }
+
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
+const update_UserSettings_HideCompletedTickets = async (req, res) => {
+    try {
+        const { entrauserid, hidecompletedtickets, modifiedby } = req.body;
+
+        if (!entrauserid) {
+            return res.status(400).json({ error: "entrauserid is required" });
+        }
+
+        await client.query(
+            "SELECT public.usersettings_update_hidecompletedtickets($1, $2, $3)",
+            [entrauserid, hidecompletedtickets, modifiedby]
+        );
+
+        return res.status(200).json({ message: "Hide completed tickets setting updated successfully" });
+    } catch (err) {
+        console.error("update_UserSettings_HideCompletedTickets error:", err.message);
+
+        if (err.message) {
+            return res.status(400).json({ error: err.message });
+        }
+
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
 module.exports = {
     create_UserSettings,
     get_UserSettings,
     update_UserSettings,
+    update_UserSettings_RecordCounts,
+    update_UserSettings_HideCompletedTickets,
 };

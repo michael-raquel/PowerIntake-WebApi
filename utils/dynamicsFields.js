@@ -51,13 +51,16 @@ const INCIDENT_SELECT_FIELDS = [
     "ss_firstresponseduedatetime",
     "ss_creatorresourceid",
     "ss_reason",
+    "ss_airouted",
     "ss_completedonautotask",
 ].join(",");
 
 const INCIDENT_EXPAND_FIELDS = [
-    "customerid_account($select=name,accountid)",
+     "customerid_account($select=name,accountid,ss_azuretenantid)",
     "primarycontactid($select=fullname,contactid)",
-    "ss_Contact($select=fullname,contactid,emailaddress1)",
+    // "ss_Contact($select=fullname,contactid,emailaddress1)",
+     "ss_Contact($select=fullname,contactid,emailaddress1,firstname,lastname,jobtitle,telephone1,mobilephone,department;$expand=parentcustomerid_account($select=accountid,name,ss_azuretenantid))",
+
 ].join(",");
 
 module.exports = {
