@@ -7,6 +7,8 @@ const { cleanDescription, dynamicsHeaders, resolveTechnicianNames } = require(".
 const { INCIDENT_SELECT_FIELDS, INCIDENT_EXPAND_FIELDS } = require("../utils/dynamicsFields");
 const { mapTicket } = require("../utils/dynamicsMapTicket");
 const { syncAttachmentToDynamics, downloadBlobAsBase64 } = require("../utils/dynamicsAttachment");
+const { BlobServiceClient, generateBlobSASQueryParameters, BlobSASPermissions, StorageSharedKeyCredential } = require("@azure/storage-blob");
+const { v4: uuidv4 } = require("uuid");
 
 const get_Ticket = async (req, res) => {
     try {
@@ -818,15 +820,6 @@ const db_batchUpsertUsers = async (contactMap) => {
     }
 };
 
-// const db_getExistingUserEmails = async (emails) => {
-//     try {
-//         const result = await client.query(`SELECT * FROM public.batch_email_check($1)`, [emails]);
-//         return new Set(result.rows.map(r => r.useremail));  
-//     } catch (e) {
-//         console.error("db_getExistingUserEmails failed:", e.message);
-//         throw e;
-//     }
-// };
 
 const db_loadTenantMap = async () => {
     try {
@@ -1320,44 +1313,6 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
     }
 };
 
-// const webhook_DynamicsTicketDelete = async (req, res) => {
-//     try {
-//         const body = req.body;
-
-//         if (!body) {
-//             return res.status(400).json({ error: "Empty request body" });
-//         }
-
-//         const incidentid = body?.PrimaryEntityId ?? null;
-
-//         if (!incidentid) {
-//             return res.status(400).json({ error: "Missing PrimaryEntityId in payload" });
-//         }
-
-//         await client.query(
-//             `SELECT public.ticket_webhook_delete($1)`,
-//             [incidentid]
-//         );
-
-//         console.log(`[WEBHOOK] Ticket deleted from DB: ${incidentid}`);
-//         return res.status(200).json({
-//             message:    "Ticket deleted successfully",
-//             incidentid,
-//         });
-
-//     } catch (err) {
-//         if (err.message?.includes('Ticket not found')) {
-//             return res.status(404).json({ error: err.message });
-//         }
-
-//         console.error("[WEBHOOK] Delete error:", err.message);
-//         return res.status(500).json({
-//             error:   "Failed to process Dynamics delete webhook",
-//             details: err.message,
-//         });
-//     }
-// };
-
 const webhook_DynamicsTicketDelete = async (req, res) => {
     try {
         const body = req.body;
@@ -1366,61 +1321,56 @@ const webhook_DynamicsTicketDelete = async (req, res) => {
             return res.status(400).json({ error: "Empty request body" });
         }
 
-        const incidentid = body?.PrimaryEntityId ?? null;
+        const io = req.app.get("io");
 
-        if (!incidentid) {
-            return res.status(400).json({ error: "Missing PrimaryEntityId in payload" });
+        const raw = body?.PrimaryEntityId ?? body?.incidentids ?? null;
+        const incidentids = Array.isArray(raw) ? raw : raw ? [raw] : [];
+
+        if (incidentids.length === 0) {
+            return res.status(400).json({ error: "Missing PrimaryEntityId or incidentids in payload" });
         }
 
-        // Get ticket info BEFORE deleting so we know who to notify
         const ticketInfoResult = await client.query(
-            `SELECT t.ticketid, u.entrauserid, tn.entratenantid, t.ticketuuid
-             FROM public.ticket t
-             LEFT JOIN "user" u ON t.userid = u.userid
-             LEFT JOIN tenant tn ON t.tenantid = tn.tenantid
-             WHERE t.dynamicsincidentid = $1`,
-            [incidentid]
+            `SELECT * FROM ticket_get_webhook_info($1::text[])`,
+            [incidentids]
         );
 
-        const ticketInfo = ticketInfoResult.rows[0] ?? null;
+        const ticketInfoList = ticketInfoResult.rows ?? [];
 
         await client.query(
-            `SELECT public.ticket_webhook_delete($1)`,
-            [incidentid]
+            `SELECT public.ticket_webhook_delete($1::text[])`,
+            [incidentids]
         );
 
-        console.log(`[WEBHOOK] Ticket deleted from DB: ${incidentid}`);
+        console.log(`[WEBHOOK] Deleted ${incidentids.length} ticket(s) from DB`);
 
-        // Emit socket event to affected user and tenant rooms
-        const io = req.app.get("io");
-        if (io && ticketInfo) {
-            const { entrauserid, entratenantid, ticketuuid } = ticketInfo;
+        if (io && ticketInfoList.length > 0) {
+            for (const ticketInfo of ticketInfoList) {
+                const { entrauserid, entratenantid, ticketuuid, dynamicsincidentid } = ticketInfo;
 
-            const payload = { ticketuuid, dynamicsincidentid: incidentid };
+                const payload = {
+                    ticketuuid:         String(ticketuuid),
+                    dynamicsincidentid,
+                };
 
-            // Notify the ticket owner
-            if (entrauserid) {
-                io.to(entrauserid).emit("ticket:deleted", payload);
-                console.log(`[WS] Emitted ticket:deleted to user: ${entrauserid}`);
-            }
+                if (entrauserid) {
+                    io.to(entrauserid).emit("ticket:deleted", payload);
+                    console.log(`[WS] Emitted ticket:deleted to user: ${entrauserid}, ticketuuid: ${ticketuuid}`);
+                }
 
-            // Notify everyone in the tenant room (managers, admins)
-            if (entratenantid) {
-                io.to(entratenantid).emit("ticket:deleted", payload);
-                console.log(`[WS] Emitted ticket:deleted to tenant: ${entratenantid}`);
+                if (entratenantid) {
+                    io.to(entratenantid).emit("ticket:deleted", payload);
+                    console.log(`[WS] Emitted ticket:deleted to tenant: ${entratenantid}`);
+                }
             }
         }
 
         return res.status(200).json({
-            message:    "Ticket deleted successfully",
-            incidentid,
+            message: `Deleted ${ticketInfoList.length} ticket(s)`,
+            deleted: ticketInfoList.length,
         });
 
     } catch (err) {
-        if (err.message?.includes('Ticket not found')) {
-            return res.status(404).json({ error: err.message });
-        }
-
         console.error("[WEBHOOK] Delete error:", err.message);
         return res.status(500).json({
             error:   "Failed to process Dynamics delete webhook",
@@ -1523,7 +1473,8 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 try {
                     const buffer   = Buffer.from(note.documentbody, "base64");
                     const mimetype = note.mimetype || "application/octet-stream";
-                    const blobName = `${uuidv4()}-${note.filename}`;
+                    const ext      = note.filename.split('.').pop();
+                    const blobName = `${uuidv4()}.${ext}`;
 
                     const blobServiceClient = BlobServiceClient.fromConnectionString(
                         process.env.AZURE_STORAGE_CONNECTION_STRING
