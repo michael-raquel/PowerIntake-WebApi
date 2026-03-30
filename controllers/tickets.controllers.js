@@ -1201,6 +1201,8 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
             return res.status(400).json({ error: "Empty request body" });
         }
 
+        const io = req.app.get("io");
+
         const incidentid = body?.PrimaryEntityId ?? null;
 
         if (!incidentid) {
@@ -1294,6 +1296,47 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
         );
 
         console.log(`[WEBHOOK] Ticket updated from Dynamics: ${ticket.ticketnumber}`);
+
+        if (io) {
+            try {
+                const ticketInfoResult = await client.query(
+                    `SELECT * FROM ticket_get_webhook_info($1::text[])`,
+                    [[incidentid]]
+                );
+
+                const ticketInfo = ticketInfoResult.rows[0] ?? null;
+
+                if (ticketInfo) {
+                    const { entrauserid, entratenantid, ticketuuid } = ticketInfo;
+
+                    const updatedResult = await client.query(
+                        `SELECT * FROM public.ticket_get($1, NULL, NULL)`,
+                        [String(ticketuuid)]
+                    );
+
+                    const updatedTicket = updatedResult.rows[0] ?? null;
+
+                    const payload = {
+                        ticketuuid:         String(ticketuuid),
+                        dynamicsincidentid: incidentid,
+                        ticket:             updatedTicket,
+                    };
+
+                    if (entrauserid) {
+                        io.to(entrauserid).emit("ticket:updated", payload);
+                        console.log(`[WS] Emitted ticket:updated to user: ${entrauserid}`);
+                    }
+
+                    if (entratenantid) {
+                        io.to(entratenantid).emit("ticket:updated", payload);
+                        console.log(`[WS] Emitted ticket:updated to tenant: ${entratenantid}`);
+                    }
+                }
+            } catch (wsErr) {
+                console.error("[WEBHOOK] Socket emit failed:", wsErr.message);
+            }
+        }
+
         return res.status(200).json({
             message:      "Ticket updated successfully",
             ticketnumber: ticket.ticketnumber,
