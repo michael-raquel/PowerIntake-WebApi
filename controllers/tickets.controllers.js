@@ -1422,6 +1422,20 @@ const webhook_DynamicsTicketDelete = async (req, res) => {
     }
 };
 
+const stripHtml2 = (html) => {
+    if (!html) return '';
+    return html
+        .replace(/<[^>]*>/gs, '')   
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\s+/g, ' ')      
+        .trim();
+};
+
 const webhook_DynamicsNoteSync = async (req, res) => {
     try {
         const body = req.body;
@@ -1501,7 +1515,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                     [
                         note.annotationid,
                         ticketid,
-                        note.notetext  ?? null,
+                        stripHtml2(note.notetext),
                         note.createdon ?? null,
                         note.modifiedon ?? null,
                         createdby,
