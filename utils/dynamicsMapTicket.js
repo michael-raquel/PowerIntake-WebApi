@@ -6,7 +6,7 @@ const mapTicket = (ticket, technicianname, notes = []) => ({
         statusid:                    ticket.statecode ?? null,
         status:                      ticket["statecode@OData.Community.Display.V1.FormattedValue"] ?? null,
         statusreasonid:              ticket.statuscode ?? null,
-        statusreason:                ticket["statuscode@OData.Community.Display.V1.FormattedValue"] ?? null,
+        statusreason:                ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"] ?? null,
         isescalated:                 ticket.isescalated,
         ss_ticketstage:              ticket["ss_ticketstage@OData.Community.Display.V1.FormattedValue"] ?? null,
         _primarycontactid_value:     ticket._primarycontactid_value,
