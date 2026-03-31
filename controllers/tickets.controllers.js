@@ -541,7 +541,8 @@ const syncToDynamics = async ({
     const dynamicsIncidentId   = dynamicsRes.data?.incidentid  ?? null;
     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
     const statusCode           = dynamicsRes.data?.statuscode   ?? null;
-    const dynamicsStatus       = DYNAMICS_STATUSCODE_MAP[statusCode] ?? "New";
+    // const dynamicsStatus       = DYNAMICS_STATUSCODE_MAP[statusCode] ?? "New";
+    const dynamicsStatus       = dynamicsRes.data?.["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"] ?? null;
     // const sourceCode  = dynamicsRes.data?.ss_source ?? null;
     const sourceLabel = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"] ?? null;
     const category = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]  ?? null;
@@ -849,9 +850,9 @@ const db_loadUserMap = async () => {
 };
 
 const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
-    const statusCode  = ticket.statuscode ?? null;
-    const statusLabel = DYNAMICS_STATUSCODE_MAP[statusCode]
-                     ?? ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]
+    // const statusCode  = ticket.statuscode ?? null;
+    const statusLabel =ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]
+                    //  ??  DYNAMICS_STATUSCODE_MAP[statusCode]
                      ?? null;
                      
     const createdby = ticket.ss_Contact?.emailaddress1 ?? null;
@@ -1250,8 +1251,9 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
             }
         }
 
-        const statusCode  = ticket.statuscode ?? null;
-        const statusLabel = DYNAMICS_STATUSCODE_MAP[statusCode] ?? null;
+        // const statusCode  = ticket.statuscode ?? null;
+        // const statusLabel = DYNAMICS_STATUSCODE_MAP[statusCode] ?? null;
+        
 
         await client.query(
             `SELECT public.ticket_webhook_update(
@@ -1287,7 +1289,7 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
                 ticket["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]                       ?? null, // $25
                 ticket["ss_tickettype@OData.Community.Display.V1.FormattedValue"]                           ?? null, // $26
                 ticket["prioritycode@OData.Community.Display.V1.FormattedValue"]                            ?? null, // $27
-                statusLabel,                                                                                          // $28
+                ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]                 ?? null,// $28
                 ticket.ss_quickfixflag?.toString()                                                         ?? null, // $29
                 ticket.ss_reason                                                                            ?? null, // $30
                 ticket.ss_completedonautotask                                                               ?? null, // $31
