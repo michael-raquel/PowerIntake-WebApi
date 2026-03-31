@@ -1327,10 +1327,10 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
                         console.log(`[WS] Emitted ticket:updated to user: ${entrauserid}`);
                     }
 
-                    if (entratenantid) {
-                        io.to(entratenantid).emit("ticket:updated", payload);
-                        console.log(`[WS] Emitted ticket:updated to tenant: ${entratenantid}`);
-                    }
+                    // if (entratenantid) {
+                    //     io.to(entratenantid).emit("ticket:updated", payload);
+                    //     console.log(`[WS] Emitted ticket:updated to tenant: ${entratenantid}`);
+                    // }
                 }
             } catch (wsErr) {
                 console.error("[WEBHOOK] Socket emit failed:", wsErr.message);
@@ -1401,10 +1401,10 @@ const webhook_DynamicsTicketDelete = async (req, res) => {
                     console.log(`[WS] Emitted ticket:deleted to user: ${entrauserid}, ticketuuid: ${ticketuuid}`);
                 }
 
-                if (entratenantid) {
-                    io.to(entratenantid).emit("ticket:deleted", payload);
-                    console.log(`[WS] Emitted ticket:deleted to tenant: ${entratenantid}`);
-                }
+                // if (entratenantid) {
+                //     io.to(entratenantid).emit("ticket:deleted", payload);
+                //     console.log(`[WS] Emitted ticket:deleted to tenant: ${entratenantid}`);
+                // }
             }
         }
 
