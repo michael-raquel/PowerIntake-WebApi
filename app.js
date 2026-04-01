@@ -83,6 +83,9 @@ app.use("/attachments", attachments);
 const notes = require("./routes/notes.routes");
 app.use("/notes", notes);
 
+const technician = require("./routes/technician.routes");
+app.use("/technicians", technician);
+
 const PORT = process.env.PORT;
 
 server.listen(PORT, () => {

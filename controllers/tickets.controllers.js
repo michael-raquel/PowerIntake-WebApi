@@ -941,10 +941,11 @@ const db_syncTicketNotes = async (ticket, token) => {
     if (!ticket.incidentid) return;
 
     try {
-       const url = `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`
-          + `?$filter=_objectid_value eq ${ticket.incidentid}`
-          + `&$select=annotationid,subject,notetext,createdon,modifiedon,_objectid_value`
-          + `&$expand=createdby($select=internalemailaddress)`; 
+        const url = `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`
+            + `?$filter=_objectid_value eq ${ticket.incidentid}`
+            + `&$select=annotationid,subject,notetext,createdon,modifiedon,_objectid_value`
+            + `&$expand=createdby($select=internalemailaddress)`;
+
         const notesRes = await axios.get(url, {
             headers: {
                 Authorization: `Bearer ${token}`,
@@ -959,34 +960,34 @@ const db_syncTicketNotes = async (ticket, token) => {
 
         if (notes.length === 0) return;
 
-        for (const note of notes) {
-            try {
-                const annotationid = note.annotationid ?? null;
-                const dynamicsincidentid = note._objectid_value ?? null;
-                const subject = note.subject ?? 'Note';
-                const notetext = stripHtml(note.notetext) ?? '';
-                const createdon = note.createdon ?? new Date().toISOString();
-                const modifiedon = note.modifiedon ?? createdon;
-                const createdby  = note.createdby?.internalemailaddress  ?? null;
-                const modifiedby = null; 
-
-                if (!annotationid || !dynamicsincidentid) {
-                    console.warn(`[NOTES] Skipping note due to missing IDs: ticket ${ticket.ticketnumber}`);
-                    continue;
-                }
-
-                await client.query(
-                    `SELECT public.note_sync_dynamics_batch($1, $2, $3, $4, $5, $6, $7, $8)`,
-                    [[annotationid], [dynamicsincidentid], [subject], [notetext], [createdon], [modifiedon], [createdby], [modifiedby]]
-                );
-
-            } catch (noteErr) {
-                console.warn(`[NOTES] Failed for ticket ${ticket.ticketnumber}, annotation ${note.annotationid}:`, noteErr.response?.data || noteErr.message);
+        const valid = notes.filter(n => {
+            if (!n.annotationid || !n._objectid_value) {
+                console.warn(`[NOTES] Skipping note due to missing IDs: ticket ${ticket.ticketnumber}`);
+                return false;
             }
-        }
+            return true;
+        });
+
+        if (valid.length === 0) return;
+
+        const annotationids      = valid.map(n => n.annotationid);
+        const dynamicsincidentids = valid.map(n => n._objectid_value);
+        const subjects           = valid.map(n => n.subject ?? 'Note');
+        const notetexts          = valid.map(n => stripHtml(n.notetext) ?? '');
+        const createdon          = valid.map(n => n.createdon ?? new Date().toISOString());
+        const modifiedon         = valid.map(n => n.modifiedon ?? n.createdon ?? new Date().toISOString());
+        const createdby          = valid.map(n => n.createdby?.internalemailaddress ?? null);
+        const modifiedby         = valid.map(() => null);
+
+        await client.query(
+            `SELECT public.note_sync_dynamics_batch($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [annotationids, dynamicsincidentids, subjects, notetexts, createdon, modifiedon, createdby, modifiedby]
+        );
+
+        console.log(`[NOTES] Batch synced ${valid.length} notes for ${ticket.ticketnumber}`);
 
     } catch (noteErr) {
-        console.warn(`[NOTES] Failed fetching notes for ${ticket.ticketnumber}:`, noteErr.response?.data || noteErr.message);
+        console.warn(`[NOTES] Failed fetching/syncing notes for ${ticket.ticketnumber}:`, noteErr.response?.data || noteErr.message);
     }
 };
 
@@ -1474,7 +1475,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             const token = await getDynamicsToken();
 
             const noteRes = await axios.get(
-                `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=annotationid,subject,notetext,createdon,modifiedon,isdocument,filename,mimetype,documentbody,_objectid_value&$expand=createdby($select=internalemailaddress)`,
+                 `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=annotationid,subject,notetext,createdon,modifiedon,isdocument,filename,mimetype,_objectid_value&$expand=createdby($select=internalemailaddress)`,
                 {
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -1528,9 +1529,23 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 console.log(`[WEBHOOK] Note synced (${messageName}): ${annotationid}`);
             }
 
-            if (note.isdocument && note.documentbody && note.filename) {
+           if (note.isdocument && note.filename) {
                 try {
-                    const buffer   = Buffer.from(note.documentbody, "base64");
+                    
+                    const fileRes = await axios.get(
+                        `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})/documentbody/$value`,
+                        {
+                            headers: {
+                                Authorization: `Bearer ${token}`,
+                                Accept: "application/octet-stream",
+                                "OData-Version": "4.0",
+                                "OData-MaxVersion": "4.0",
+                            },
+                            responseType: "arraybuffer",
+                        }
+                    );
+
+                    const buffer   = Buffer.from(fileRes.data);
                     const mimetype = note.mimetype || "application/octet-stream";
                     const ext      = note.filename.split('.').pop();
                     const blobName = `${uuidv4()}.${ext}`;
