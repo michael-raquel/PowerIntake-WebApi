@@ -1531,7 +1531,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
 
            if (note.isdocument && note.filename) {
                 try {
-                    
+
                     const fileRes = await axios.get(
                         `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})/documentbody/$value`,
                         {
@@ -1547,8 +1547,8 @@ const webhook_DynamicsNoteSync = async (req, res) => {
 
                     const buffer   = Buffer.from(fileRes.data);
                     const mimetype = note.mimetype || "application/octet-stream";
-                    const ext      = note.filename.split('.').pop();
-                    const blobName = `${uuidv4()}.${ext}`;
+                    const originalName = note.filename.replace(/[^a-zA-Z0-9.\-_]/g, '-');
+                    const blobName = `${uuidv4()}-${originalName}`;
 
                     const blobServiceClient = BlobServiceClient.fromConnectionString(
                         process.env.AZURE_STORAGE_CONNECTION_STRING
