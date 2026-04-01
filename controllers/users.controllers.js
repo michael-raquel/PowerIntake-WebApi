@@ -312,28 +312,14 @@ const get_User_Info = async (req, res) => {
 const update_UserRole = async (req, res) => {
   try {
     const { entrauserid, userrole, modifiedby } = req.body;
-    //Will remove this if it fails -jasper
-    if (!entrauserid) {
-      return res.status(400).json({ error: "entrauserid is required" });
-    }
-    //
+
     const result = await client.query(
       "SELECT public.user_update_role($1, $2, $3)",
       [entrauserid, userrole, modifiedby]
     );
 
     const useruuid = result.rows[0]?.user_update_role || null;
-    // Emit real-time notification to the user about their role change (will remove this if it fails -jasper)
-    const io = req.app?.get("io");
-    if (io) {
-      io.to(entrauserid).emit("user:role_changed", {
-        entrauserid,
-        userrole,
-        updatedBy: modifiedby ?? null,
-        countdownSeconds: 10,
-      });
-    }
-    //
+
     return res.status(200).json({ useruuid });
   } catch (err) {
     console.error("update_UserRole error:", err.message);
