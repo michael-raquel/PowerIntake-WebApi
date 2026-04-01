@@ -382,6 +382,7 @@ const create_Ticket = async (req, res) => {
     syncToDynamics({
       io,
      entrauserid, 
+      entratenantid,
       token,
       ticketuuid,
       dynamicsAccountId,
@@ -408,12 +409,55 @@ const create_Ticket = async (req, res) => {
   }
 };
     
+
 const syncToDynamics = async ({
-    io, token, entrauserid, ticketuuid, dynamicsAccountId,
+    io, token, entrauserid, entratenantid, ticketuuid, dynamicsAccountId,
     userInfo, title, description, usertimezone,
     date, starttime, endtime, contactid, attachments
 }) => {
     const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
+
+    if (!dynamicsAccountId) {
+        try {
+            const tenantRes = await client.query(
+                "SELECT * FROM public.tenant WHERE entratenantid = $1",
+                [entratenantid]
+            );
+            const tenant = tenantRes.rows[0];
+
+            if (tenant) {
+                const createAccountRes = await axios.post(
+                    `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts`,
+                    {
+                        name:          tenant.tenantname,
+                        emailaddress1: tenant.tenantemail ?? null,
+                    },
+                    {
+                        headers: {
+                            Authorization:      `Bearer ${token}`,
+                            Accept:             "application/json",
+                            "Content-Type":     "application/json",
+                            "OData-Version":    "4.0",
+                            "OData-MaxVersion": "4.0",
+                            Prefer:             "return=representation",
+                        },
+                    }
+                );
+
+                dynamicsAccountId = createAccountRes.data?.accountid ?? null;
+                console.log("[DYNAMICS] Tenant account created:", dynamicsAccountId);
+
+                if (dynamicsAccountId) {
+                    await client.query(
+                        "SELECT public.tenant_update_dynamicsaccountid($1, $2)",
+                        [entratenantid, dynamicsAccountId]
+                    );
+                }
+            }
+        } catch (tenantErr) {
+            console.error("[DYNAMICS] Failed to create tenant account:", tenantErr.response?.data || tenantErr.message);
+        }
+    }
 
     const dynamicsPayload = {
         "title":             title,
@@ -451,12 +495,12 @@ const syncToDynamics = async ({
         const ownerId = ownerRes.data.value?.[0]?.systemuserid ?? null;
         if (ownerId) {
             dynamicsPayload["ownerid@odata.bind"] = `/systemusers(${ownerId})`;
-            console.log("Owner resolved:", ownerId);
+            console.log("[DYNAMICS] Owner resolved:", ownerId);
         } else {
-            console.warn("Owner not found for Joseph@SpartaServ.com");
+            console.warn("[DYNAMICS] Owner not found for Joseph@SpartaServ.com");
         }
     } catch (ownerErr) {
-        console.error("Failed to resolve owner:", ownerErr.response?.data || ownerErr.message);
+        console.error("[DYNAMICS] Failed to resolve owner:", ownerErr.response?.data || ownerErr.message);
     }
 
     if (contactid) {
@@ -478,7 +522,7 @@ const syncToDynamics = async ({
             let dynamicsContactId = contactRes.data.value?.[0]?.contactid ?? null;
 
             if (!dynamicsContactId) {
-                console.warn(`No Dynamics contact found for ${userInfo.useremail} — creating...`);
+                console.warn(`[DYNAMICS] No contact found for ${userInfo.useremail} — creating...`);
 
                 const nameParts = (userInfo.username ?? "").trim().split(/\s+/);
                 const firstname = nameParts.length > 1 ? nameParts[0] : null;
@@ -488,12 +532,12 @@ const syncToDynamics = async ({
                     `${process.env.DYNAMICS_URL}/api/data/v9.2/contacts`,
                     {
                         emailaddress1: userInfo.useremail,
-                        firstname:     firstname,
-                        lastname:      lastname,
-                        jobtitle:      userInfo.jobtitle      ?? null,
-                        telephone1:    userInfo.businessphone ?? null,
-                        mobilephone:   userInfo.mobilephone   ?? null,
-                        department:    userInfo.department    ?? null,
+                        firstname,
+                        lastname,
+                        jobtitle:    userInfo.jobtitle      ?? null,
+                        telephone1:  userInfo.businessphone ?? null,
+                        mobilephone: userInfo.mobilephone   ?? null,
+                        department:  userInfo.department    ?? null,
                         ...(dynamicsAccountId && {
                             "parentcustomerid_account@odata.bind": `/accounts(${dynamicsAccountId})`
                         }),
@@ -505,13 +549,13 @@ const syncToDynamics = async ({
                             "Content-Type":     "application/json",
                             "OData-Version":    "4.0",
                             "OData-MaxVersion": "4.0",
-                            "Prefer":           "return=representation",
+                            Prefer:             "return=representation",
                         }
                     }
                 );
 
                 dynamicsContactId = createContactRes.data?.contactid ?? null;
-                console.log("Contact created in Dynamics:", dynamicsContactId);
+                console.log("[DYNAMICS] Contact created:", dynamicsContactId);
             }
 
             if (dynamicsContactId) {
@@ -519,7 +563,7 @@ const syncToDynamics = async ({
             }
 
         } catch (contactErr) {
-            console.error("Failed to resolve/create Dynamics contact:", contactErr.response?.data || contactErr.message);
+            console.error("[DYNAMICS] Failed to resolve/create contact:", contactErr.response?.data || contactErr.message);
         }
     }
 
@@ -533,79 +577,70 @@ const syncToDynamics = async ({
                 "Content-Type":     "application/json",
                 "OData-Version":    "4.0",
                 "OData-MaxVersion": "4.0",
-               Prefer: 'return=representation, odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
+                Prefer: 'return=representation, odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
             }
         }
     );
 
     const dynamicsIncidentId   = dynamicsRes.data?.incidentid  ?? null;
     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
-    const statusCode           = dynamicsRes.data?.statuscode   ?? null;
-    // const dynamicsStatus       = DYNAMICS_STATUSCODE_MAP[statusCode] ?? "New";
     const dynamicsStatus       = dynamicsRes.data?.["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"] ?? null;
-    // const sourceCode  = dynamicsRes.data?.ss_source ?? null;
-    const sourceLabel = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"] ?? null;
-    const category = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]  ?? null;
-    const duedate = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"] ?? null;
-    const priority = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]  ?? null;
-    const ticketlifecycle = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const sourceLabel          = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"]              ?? null;
+    const category             = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]      ?? null;
+    const duedate              = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"]             ?? null;
+    const priority             = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]           ?? null;
+    const ticketlifecycle      = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"]         ?? null;
 
-    console.log("Dynamics incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle });
+    console.log("[DYNAMICS] Incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus });
 
-   if (dynamicsIncidentId) {
+    if (dynamicsIncidentId) {
         await client.query(
             "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
         );
 
         const updated = await client.query(
-        "SELECT * FROM public.ticket_get($1, NULL, NULL)",
-        [ticketuuid]
+            "SELECT * FROM public.ticket_get($1, NULL, NULL)",
+            [ticketuuid]
         );
 
         if (io && entrauserid && updated.rows[0]) {
-        io.to(entrauserid).emit("ticket:synced", {
-            ticketuuid,
-            ticket: updated.rows[0],
-        });
-        console.log("[WS] Emitted ticket:synced to:", entrauserid);
+            io.to(entrauserid).emit("ticket:synced", {
+                ticketuuid,
+                ticket: updated.rows[0],
+            });
+            console.log("[WS] Emitted ticket:synced to:", entrauserid);
         }
 
+        const attachmentList = toArray(attachments);
+        if (attachmentList.length > 0) {
+            const annotationIds = await Promise.all(
+                attachmentList.map(blobUrl =>
+                    syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
+                )
+            ).catch(err => {
+                console.error("[DYNAMICS] Attachment sync failed:", err.message);
+                return [];
+            });
 
-       const attachmentList = toArray(attachments);
-    if (attachmentList.length > 0) {
-     
+            for (let i = 0; i < attachmentList.length; i++) {
+                const annotationid = annotationIds[i];
+                const blobUrl      = attachmentList[i];
 
-        const annotationIds = await Promise.all(
-            attachmentList.map(blobUrl =>
-                syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
-            )
-        ).catch(err => {
-            console.error("[DYNAMICS] Attachment sync failed:", err.message);
-            return [];
-        });
+                if (!annotationid) {
+                    console.warn(`[DYNAMICS] No annotationid for index ${i}, skipping`);
+                    continue;
+                }
 
-        console.log(`[DYNAMICS] Returned annotationIds:`, annotationIds);
-
-        for (let i = 0; i < attachmentList.length; i++) {
-            const annotationid = annotationIds[i];
-            const blobUrl      = attachmentList[i];
-
-            if (!annotationid) {
-                console.warn(`[DYNAMICS] No annotationid returned for index ${i}, skipping`);
-                continue;
+                try {
+                    await client.query(
+                        `SELECT public.attachment_update_annotation($1, $2)`,
+                        [blobUrl, annotationid]
+                    );
+                } catch (e) {
+                    console.error(`[DYNAMICS] Failed to save annotationid for ${blobUrl}:`, e.message);
+                }
             }
-
-            try {
-                const updateResult = await client.query(
-                    `SELECT public.attachment_update_annotation($1, $2)`,
-                    [blobUrl, annotationid]
-                );
-             
-            } catch (e) {
-                console.error(`[DYNAMICS] Failed to save annotationid for ${blobUrl}:`, e.message);
-            }
-        }
         }
     }
 };
@@ -810,11 +845,12 @@ const db_batchUpsertUsers = async (contactMap) => {
     const departments    = contacts.map(([, c])    => c.department    ?? null);
     const userroles      = contacts.map(()         => "user");
     const entratenantids = contacts.map(([, c])    => c.entraTenantId ?? null);
+    const entrauserids = contacts.map(([, c]) => c.entrauserid ?? null);
 
     try {
         await client.query(
-            `SELECT public.batch_user_insert($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [emails, usernames, jobtitles, businessphones, mobilephones, departments, userroles, entratenantids]
+            `SELECT public.batch_user_insert($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [emails, usernames, jobtitles, businessphones, mobilephones, departments, userroles, entratenantids, entrauserids]
         );
     } catch (e) {
         throw e;
@@ -841,7 +877,10 @@ const db_loadUserMap = async () => {
         return Object.fromEntries(
             result.rows
                 .filter(r => r.useremail != null)
-                .map(r => [r.useremail, r.userid])  
+                .map(r => [r.useremail, { 
+                    userid:       r.userid, 
+                    entrauserid:  r.entrauserid ?? null,
+                }])
         );
     } catch (e) {
         console.error("db_loadUserMap failed:", e.message);
@@ -849,7 +888,7 @@ const db_loadUserMap = async () => {
     }
 };
 
-const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
+const db_syncTicket = async (ticket, tenantid, userid, technicianname, entrauserid) => {
     // const statusCode  = ticket.statuscode ?? null;
     const statusLabel =ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]
                     //  ??  DYNAMICS_STATUSCODE_MAP[statusCode]
@@ -1043,11 +1082,13 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
                     continue;
                 }
 
-                const contactEmail = ticket.ss_Contact?.emailaddress1 ?? null;
-                const userid = contactEmail ? (userMap[contactEmail] ?? null) : null;
+                const contactEmail   = ticket.ss_Contact?.emailaddress1 ?? null;
+                const userEntry      = contactEmail ? (userMap[contactEmail] ?? null) : null;
+                const userid         = userEntry?.userid      ?? null;
+                const entrauserid    = userEntry?.entrauserid ?? null;
                 const technicianname = technicianMap[ticket._ss_assignedtechnician_value] ?? null;
 
-                await db_syncTicket(ticket, tenantid, userid, technicianname);
+                await db_syncTicket(ticket, tenantid, userid, technicianname, entrauserid);
 
                 db_syncTicketNotes(ticket, token).catch(err => {
                     console.warn(`[NOTES] Background sync failed for ${ticket.ticketnumber}:`, err.message);

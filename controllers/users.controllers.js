@@ -507,10 +507,7 @@ const sync_Users = async (req, res) => {
 
             if (dynamicsAccount?.accountid) {
                 await client.query(
-                    `UPDATE public.tenant 
-                     SET dynamicsaccountid = $1 
-                     WHERE entratenantid = $2 
-                     AND dynamicsaccountid IS NULL`,
+                    `SELECT * FROM tenant_update_dynamicsaccountid($1, $2)`,
                     [dynamicsAccount.accountid, entraTenantId]
                 );
                 console.log(`[SYNC] Linked Dynamics accountid ${dynamicsAccount.accountid} to tenant ${entraTenantId}`);
@@ -573,9 +570,6 @@ const sync_Users = async (req, res) => {
 };
 
 
-const AZURE_CLIENT_ID     = process.env.AZURE_CLIENT_ID;
-const AZURE_CLIENT_SECRET = process.env.AZURE_CLIENT_SECRET;
-
 const create_user_onlogin = async (req, res) => {
   try {
     const entraUserId = req.user?.oid || req.user?.sub;
@@ -631,8 +625,6 @@ const create_user_onlogin = async (req, res) => {
         tenant.v_tenantemail,    // $11
         userRole,           // $12
         "true",             // $13
-        // AZURE_CLIENT_ID and AZURE_CLIENT_SECRET removed —
-        // credentials are now env-only, not stored in DB
       ]
     );
 
