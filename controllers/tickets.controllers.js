@@ -1547,6 +1547,8 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             return res.status(400).json({ error: "Empty request body" });
         }
 
+        const io = req.app.get("io");
+
         const annotationid = body?.PrimaryEntityId ?? null;
         if (!annotationid) {
             return res.status(400).json({ error: "Missing PrimaryEntityId in payload" });
@@ -1606,6 +1608,13 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             const ticketid  = ticketRes.rows[0]?.ticketid ?? null;
             const createdby = note.createdby?.internalemailaddress ?? null;
 
+             const ticketInfoResult = await client.query(
+                `SELECT * FROM ticket_get_webhook_info($1::text[])`,
+                [[incidentid]]
+            );
+
+                const ticketInfo = ticketInfoResult.rows[0] ?? null;
+
             const results = {
                 annotationid,
                 note:       false,
@@ -1627,6 +1636,15 @@ const webhook_DynamicsNoteSync = async (req, res) => {
 
                 results.note = true;
                 console.log(`[WEBHOOK] Note synced (${messageName}): ${annotationid}`);
+
+                 if (io && ticketInfo?.entrauserid) {
+                    io.to(ticketInfo.entrauserid).emit("note:synced", {
+                        ticketuuid:  String(ticketInfo.ticketuuid),
+                        annotationid,
+                        messageName,
+                    });
+                    console.log(`[WS] Emitted note:synced to: ${ticketInfo.entrauserid}`);
+                }
             }
 
            if (note.isdocument && note.filename) {
