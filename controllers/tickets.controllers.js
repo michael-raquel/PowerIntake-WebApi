@@ -1030,6 +1030,54 @@ const db_syncTicketNotes = async (ticket, token) => {
     }
 };
 
+const contactMapWithEntraIds = async (contactMap, token) => {
+    if (contactMap.size === 0) return contactMap;
+
+    const emails = [...contactMap.keys()];
+    const chunkSize = 10;
+
+    for (let i = 0; i < emails.length; i += chunkSize) {
+        const chunk = emails.slice(i, i + chunkSize);
+
+        try {
+            const filter = chunk
+                .map(email => `internalemailaddress eq '${email}'`)
+                .join(' or ');
+
+            const res = await axios.get(
+                `${process.env.DYNAMICS_URL}/api/data/v9.2/systemusers?$filter=${encodeURIComponent(filter)}&$select=internalemailaddress,azureactivedirectoryobjectid`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        Accept: "application/json",
+                        "OData-Version": "4.0",
+                        "OData-MaxVersion": "4.0",
+                    }
+                }
+            );
+
+            const dynamicsUsers = res.data.value ?? [];
+
+            for (const dUser of dynamicsUsers) {
+                const email = dUser.internalemailaddress ?? null;
+                const entraId = dUser.azureactivedirectoryobjectid ?? null;
+                if (!email || !entraId) continue;
+
+                const contact = contactMap.get(email) ?? contactMap.get(email.toLowerCase());
+                if (contact) {
+                    contact.entrauserid = entraId;
+                    console.log(`[DYNAMICS] Mapped entrauserid for ${email}: ${entraId}`);
+                }
+            }
+
+        } catch (err) {
+            console.warn(`[ENTRA] Failed to enrich chunk ${i}:`, err.response?.data || err.message);
+        }
+    }
+
+    return contactMap;
+};
+
 const sync_DynamicsTickets_toDB = async (req, res) => {
     try {
         const token = await getDynamicsToken();
@@ -1065,9 +1113,15 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
 
         await db_batchUpsertTenants(buildAccountMap(filtered));
         const tenantMap = await db_loadTenantMap();
-        await db_batchUpsertUsers(buildContactMap(filtered));
+
+        const contactMap = buildContactMap(filtered);
+        await contactMapWithEntraIds(contactMap, token); 
+        
+        await db_batchUpsertUsers(contactMap);
         const userMap = await db_loadUserMap();
         const technicianMap = await resolveTechnicianNames(filtered, token);
+
+      
 
         let synced = 0;
         let skipped = 0;
@@ -1182,7 +1236,10 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
         await db_batchUpsertTenants(buildAccountMap(filtered));
         const tenantMap = await db_loadTenantMap();
 
-        await db_batchUpsertUsers(buildContactMap(filtered));
+        const contactMap = buildContactMap(filtered);
+        await contactMapWithEntraIds(contactMap, token); 
+        await db_batchUpsertUsers(contactMap);
+
         const userMap = await db_loadUserMap();
 
         const technicianMap = await resolveTechnicianNames(filtered, token);
@@ -1201,10 +1258,12 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
                 }
 
                 const contactEmail = ticket.ss_Contact?.emailaddress1 ?? null;
-                const userid = contactEmail ? (userMap[contactEmail] ?? null) : null;
                 const technicianname = technicianMap[ticket._ss_assignedtechnician_value] ?? null;
+                const userEntry   = contactEmail ? (userMap[contactEmail] ?? null) : null;
+                const userid      = userEntry?.userid      ?? null;
+                const entrauserid = userEntry?.entrauserid ?? null;
 
-                await db_syncTicket(ticket, tenantid, userid, technicianname);
+                await db_syncTicket(ticket, tenantid, userid, technicianname, entrauserid);
                 await db_syncTicketNotes(ticket, token);
                 synced++;
                 

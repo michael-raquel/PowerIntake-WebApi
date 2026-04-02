@@ -612,19 +612,19 @@ const create_user_onlogin = async (req, res) => {
     await client.query(
       `SELECT public.user_create_onlogin($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [
-        entraUserId,        // $1
-        tenantId,           // $2
-        displayName,        // $3
-        null,               // $4
-        null,               // $5
-        email,              // $6
-        null,               // $7
-        null,               // $8
-        new Date().toISOString(), // $9
-        tenant.v_tenantname,     // $10
-        tenant.v_tenantemail,    // $11
-        userRole,           // $12
-        "true",             // $13
+        entraUserId,        
+        tenantId,           
+        displayName,        
+        null,               
+        null,              
+        email,              
+        null,               
+        null,               
+        new Date().toISOString(), 
+        tenant.v_tenantname,     
+        tenant.v_tenantemail,   
+        userRole,          
+        "true",            
       ]
     );
 
