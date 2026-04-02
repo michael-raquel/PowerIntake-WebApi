@@ -1664,8 +1664,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
 
                 const buffer       = Buffer.from(fileRes.data);
                 const mimetype     = note.mimetype || "application/octet-stream";
-                const originalName = note.filename.replace(/[^a-zA-Z0-9.\-_]/g, '-');
-                const blobName     = `${uuidv4()}-${originalName}`;
+                const blobName = note.filename.replace(/[^a-zA-Z0-9.\-_]/g, '-');
 
                 const blobServiceClient = BlobServiceClient.fromConnectionString(
                     process.env.AZURE_STORAGE_CONNECTION_STRING
