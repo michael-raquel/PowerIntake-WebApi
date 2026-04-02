@@ -1577,7 +1577,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             const token = await getDynamicsToken();
 
             const noteRes = await axios.get(
-                 `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=annotationid,subject,notetext,createdon,modifiedon,isdocument,filename,mimetype,_objectid_value&$expand=createdby($select=internalemailaddress)`,
+                `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=annotationid,subject,notetext,createdon,modifiedon,isdocument,filename,mimetype,_objectid_value&$expand=createdby($select=internalemailaddress)`,
                 {
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -1647,108 +1647,101 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 }
             }
 
-        if (note.isdocument && note.filename) {
-            try {
-               
-                const fileRes = await axios.get(
-                    `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=documentbody,mimetype,filename`,
-                    {
-                        headers: {
-                            Authorization:      `Bearer ${token}`,
-                            Accept:             "application/json",
-                            "OData-Version":    "4.0",
-                            "OData-MaxVersion": "4.0",
-                        },
+                if (note.isdocument && note.filename) {
+                try {
+                    
+                    const bodyRes = await axios.get(
+                        `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=documentbody`,
+                        {
+                            headers: {
+                                Authorization:      `Bearer ${token}`,
+                                Accept:             "application/json",
+                                "OData-Version":    "4.0",
+                                "OData-MaxVersion": "4.0",
+                            },
+                        }
+                    );
+
+                    const base64Data = bodyRes.data?.documentbody ?? null;
+
+                    if (!base64Data) {
+                        console.warn(`[WEBHOOK] No documentbody for ${annotationid} — skipping`);
+                    } else {
+                        const buffer = Buffer.from(base64Data, "base64");
+
+                        const fileExt = (note.filename.split('.').pop() || '').toLowerCase();
+                        const mimeMap = {
+                            'png':  'image/png',
+                            'jpg':  'image/jpeg',
+                            'jpeg': 'image/jpeg',
+                            'gif':  'image/gif',
+                            'webp': 'image/webp',
+                            'svg':  'image/svg+xml',
+                            'pdf':  'application/pdf',
+                            'doc':  'application/msword',
+                            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                            'xls':  'application/vnd.ms-excel',
+                            'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            'txt':  'text/plain',
+                            'zip':  'application/zip',
+                        };
+                        const mimetype = mimeMap[fileExt] || note.mimetype || 'application/octet-stream';
+
+                        const sanitizedName = note.filename.replace(/[^a-zA-Z0-9.\-_]/g, '-');
+                        const blobName      = `${uuidv4()}-${sanitizedName}`;
+
+                        const blobServiceClient = BlobServiceClient.fromConnectionString(
+                            process.env.AZURE_STORAGE_CONNECTION_STRING
+                        );
+                        const containerClient = blobServiceClient.getContainerClient(
+                            process.env.AZURE_STORAGE_CONTAINER || "images"
+                        );
+                        await containerClient.createIfNotExists();
+
+                        const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+                        await blockBlobClient.uploadData(buffer, {
+                            blobHTTPHeaders: { blobContentType: mimetype },
+                        });
+
+                        const sharedKeyCredential = new StorageSharedKeyCredential(
+                            process.env.AZURE_STORAGE_ACCOUNT_NAME,
+                            process.env.AZURE_STORAGE_ACCOUNT_KEY
+                        );
+                        const sasToken = generateBlobSASQueryParameters(
+                            {
+                                containerName: process.env.AZURE_STORAGE_CONTAINER || "images",
+                                blobName,
+                                permissions: BlobSASPermissions.parse("r"),
+                                startsOn:  new Date(),
+                                expiresOn: new Date(new Date().valueOf() + 365 * 24 * 60 * 60 * 1000),
+                            },
+                            sharedKeyCredential
+                        ).toString();
+
+                        const blobUrl = `https://${process.env.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${process.env.AZURE_STORAGE_CONTAINER || "images"}/${blobName}?${sasToken}`;
+
+                        await client.query(
+                            `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
+                            [note.annotationid, ticketid, blobUrl, note.createdon ?? null, createdby]
+                        );
+
+                        results.attachment = true;
+                        console.log(`[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${note.filename} [${mimetype}]`);
+
+                        if (io && ticketInfo?.entrauserid) {
+                            io.to(ticketInfo.entrauserid).emit("attachment:synced", {
+                                ticketuuid:   String(ticketInfo.ticketuuid),
+                                annotationid,
+                                messageName,
+                            });
+                            console.log(`[WS] Emitted attachment:synced to: ${ticketInfo.entrauserid}`);
+                        }
                     }
-                );
-
-                const base64Data = fileRes.data?.documentbody ?? null;
-
-                if (!base64Data) {
-                    console.warn(`[WEBHOOK] No documentbody returned for annotation ${annotationid}`);
-                    return;
+                } catch (attachErr) {
+                    console.error(`[WEBHOOK] Attachment upload failed for ${annotationid}:`, attachErr.message, attachErr.response?.data);
                 }
-
-                const buffer = Buffer.from(base64Data, "base64");
-
-                const fileExt = (note.filename.split('.').pop() || '').toLowerCase();
-                const mimeMap = {
-                    'png':  'image/png',
-                    'jpg':  'image/jpeg',
-                    'jpeg': 'image/jpeg',
-                    'gif':  'image/gif',
-                    'webp': 'image/webp',
-                    'svg':  'image/svg+xml',
-                    'pdf':  'application/pdf',
-                    'doc':  'application/msword',
-                    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                    'xls':  'application/vnd.ms-excel',
-                    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    'txt':  'text/plain',
-                    'zip':  'application/zip',
-                };
-                const mimetype = mimeMap[fileExt] || note.mimetype || 'application/octet-stream';
-
-                const sanitizedName = note.filename.replace(/[^a-zA-Z0-9.\-_]/g, '-');
-                const blobName      = `${uuidv4()}-${sanitizedName}`;
-
-                const blobServiceClient = BlobServiceClient.fromConnectionString(
-                    process.env.AZURE_STORAGE_CONNECTION_STRING
-                );
-                const containerClient = blobServiceClient.getContainerClient(
-                    process.env.AZURE_STORAGE_CONTAINER || "images"
-                );
-                await containerClient.createIfNotExists();
-
-                const blockBlobClient = containerClient.getBlockBlobClient(blobName);
-                await blockBlobClient.uploadData(buffer, {
-                    blobHTTPHeaders: { blobContentType: mimetype },
-                });
-
-                const sharedKeyCredential = new StorageSharedKeyCredential(
-                    process.env.AZURE_STORAGE_ACCOUNT_NAME,
-                    process.env.AZURE_STORAGE_ACCOUNT_KEY
-                );
-                const sasToken = generateBlobSASQueryParameters(
-                    {
-                        containerName: process.env.AZURE_STORAGE_CONTAINER || "images",
-                        blobName,
-                        permissions: BlobSASPermissions.parse("r"),
-                        startsOn:  new Date(),
-                        expiresOn: new Date(new Date().valueOf() + 365 * 24 * 60 * 60 * 1000),
-                    },
-                    sharedKeyCredential
-                ).toString();
-
-                const blobUrl = `https://${process.env.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${process.env.AZURE_STORAGE_CONTAINER || "images"}/${blobName}?${sasToken}`;
-
-                await client.query(
-                    `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
-                    [
-                        note.annotationid,
-                        ticketid,
-                        blobUrl,
-                        note.createdon ?? null,
-                        createdby,
-                    ]
-                );
-
-                results.attachment = true;
-                console.log(`[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${note.filename} [${mimetype}]`);
-
-                if (io && ticketInfo?.entrauserid) {
-                    io.to(ticketInfo.entrauserid).emit("attachment:synced", {
-                        ticketuuid:   String(ticketInfo.ticketuuid),
-                        annotationid,
-                        messageName,
-                    });
-                    console.log(`[WS] Emitted attachment:synced to: ${ticketInfo.entrauserid}`);
-                }
-
-            } catch (attachErr) {
-                console.error(`[WEBHOOK] Attachment upload failed for ${annotationid}:`, attachErr.message, attachErr.response?.data);
             }
-        }
+
 
             return res.status(200).json({
                 message: `Annotation ${messageName}d successfully`,
