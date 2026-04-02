@@ -1648,75 +1648,82 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             }
 
            if (note.isdocument && note.filename) {
-                try {
-
-                    const fileRes = await axios.get(
-                        `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})/documentbody/$value`,
-                        {
-                            headers: {
-                                Authorization: `Bearer ${token}`,
-                                Accept: "application/octet-stream",
-                                "OData-Version": "4.0",
-                                "OData-MaxVersion": "4.0",
-                            },
-                            responseType: "arraybuffer",
-                        }
-                    );
-
-                    const buffer   = Buffer.from(fileRes.data);
-                    const mimetype = note.mimetype || "application/octet-stream";
-                    const originalName = note.filename.replace(/[^a-zA-Z0-9.\-_]/g, '-');
-                    const blobName = `${uuidv4()}-${originalName}`;
-
-                    const blobServiceClient = BlobServiceClient.fromConnectionString(
-                        process.env.AZURE_STORAGE_CONNECTION_STRING
-                    );
-                    const containerClient = blobServiceClient.getContainerClient(
-                        process.env.AZURE_STORAGE_CONTAINER || "images"
-                    );
-                    await containerClient.createIfNotExists();
-
-                    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
-                    await blockBlobClient.uploadData(buffer, {
-                        blobHTTPHeaders: { blobContentType: mimetype },
-                    });
-
-                    const sharedKeyCredential = new StorageSharedKeyCredential(
-                        process.env.AZURE_STORAGE_ACCOUNT_NAME,
-                        process.env.AZURE_STORAGE_ACCOUNT_KEY
-                    );
-                    const sasToken = generateBlobSASQueryParameters(
-                        {
-                            containerName: process.env.AZURE_STORAGE_CONTAINER || "images",
-                            blobName,
-                            permissions: BlobSASPermissions.parse("r"),
-                            startsOn:  new Date(),
-                            expiresOn: new Date(new Date().valueOf() + 365 * 24 * 60 * 60 * 1000),
+            try {
+                const fileRes = await axios.get(
+                    `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})/documentbody/$value`,
+                    {
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                            Accept: "application/octet-stream",
+                            "OData-Version": "4.0",
+                            "OData-MaxVersion": "4.0",
                         },
-                        sharedKeyCredential
-                    ).toString();
+                        responseType: "arraybuffer",
+                    }
+                );
 
-                    const blobUrl = `https://${process.env.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${process.env.AZURE_STORAGE_CONTAINER || "images"}/${blobName}?${sasToken}`;
+                const buffer       = Buffer.from(fileRes.data);
+                const mimetype     = note.mimetype || "application/octet-stream";
+                const originalName = note.filename.replace(/[^a-zA-Z0-9.\-_]/g, '-');
+                const blobName     = `${uuidv4()}-${originalName}`;
 
-                    await client.query(
-                        `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
-                        [
-                            note.annotationid,
-                            ticketid,
-                            blobUrl,          
-                            note.createdon ?? null,
-                            createdby,
-                        ]
-                    );
+                const blobServiceClient = BlobServiceClient.fromConnectionString(
+                    process.env.AZURE_STORAGE_CONNECTION_STRING
+                );
+                const containerClient = blobServiceClient.getContainerClient(
+                    process.env.AZURE_STORAGE_CONTAINER || "images"
+                );
+                await containerClient.createIfNotExists();
 
-                    results.attachment = true;
-                    console.log(`[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${note.filename}`);
+                const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+                await blockBlobClient.uploadData(buffer, {
+                    blobHTTPHeaders: { blobContentType: mimetype },
+                });
 
-                } catch (attachErr) {
-                    console.error(`[WEBHOOK] Attachment upload failed for ${annotationid}:`, attachErr.message);
-            
+                const sharedKeyCredential = new StorageSharedKeyCredential(
+                    process.env.AZURE_STORAGE_ACCOUNT_NAME,
+                    process.env.AZURE_STORAGE_ACCOUNT_KEY
+                );
+                const sasToken = generateBlobSASQueryParameters(
+                    {
+                        containerName: process.env.AZURE_STORAGE_CONTAINER || "images",
+                        blobName,
+                        permissions: BlobSASPermissions.parse("r"),
+                        startsOn:  new Date(),
+                        expiresOn: new Date(new Date().valueOf() + 365 * 24 * 60 * 60 * 1000),
+                    },
+                    sharedKeyCredential
+                ).toString();
+
+                const blobUrl = `https://${process.env.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${process.env.AZURE_STORAGE_CONTAINER || "images"}/${blobName}?${sasToken}`;
+
+                await client.query(
+                    `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
+                    [
+                        note.annotationid,
+                        ticketid,
+                        blobUrl,
+                        note.createdon ?? null,
+                        createdby,
+                    ]
+                );
+
+                results.attachment = true;
+                console.log(`[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${note.filename}`);
+
+                if (io && ticketInfo?.entrauserid) {
+                    io.to(ticketInfo.entrauserid).emit("attachment:synced", {
+                        ticketuuid:   String(ticketInfo.ticketuuid),
+                        annotationid,
+                        messageName,
+                    });
+                    console.log(`[WS] Emitted attachment:synced to: ${ticketInfo.entrauserid}`);
                 }
+
+            } catch (attachErr) {
+                console.error(`[WEBHOOK] Attachment upload failed for ${annotationid}:`, attachErr.message);
             }
+        }
 
             return res.status(200).json({
                 message: `Annotation ${messageName}d successfully`,
