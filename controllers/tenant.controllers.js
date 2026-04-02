@@ -16,14 +16,16 @@ const check_ConsentStatus = async (req, res) => {
 
     // ✅ Use isconsented column instead
     const consented = tenantExists ? row.isconsented === true : false;
+    const isactive = tenantExists ? row.isactive === true : false;
 
     console.log(
-      `[CONSENT STATUS] tenantId=${tenantId} tenantExists=${tenantExists} consented=${consented}`
+      `[CONSENT STATUS] tenantId=${tenantId} tenantExists=${tenantExists} consented=${consented} isactive=${isactive}`
     );
 
     return res.status(200).json({
       tenantExists,
       consented,
+      isactive,
       tenantId,
     });
 
