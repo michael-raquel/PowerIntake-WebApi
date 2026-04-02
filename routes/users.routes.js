@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { get_AllUsers, get_UserById, get_UserManager, get_UserDirectReports,
         get_UserFullProfile, get_AllUsersWithDetails, get_UserGroups, get_UserAppRoleAssignments, get_UserFromDb, get_User_Info,
-        update_UserRole, sync_Users, create_user_onlogin } = require('../controllers/users.controllers');
+        update_UserRole, sync_Users, create_user_onlogin, create_Group } = require('../controllers/users.controllers');
 const validateToken = require("../middlewares/validateToken");
 
 router.get('/', get_AllUsers);
@@ -18,5 +18,6 @@ router.get('/user-info', get_User_Info);
 router.put('/role', validateToken, update_UserRole);
 router.post('/sync', sync_Users);
 router.post("/login-sync", validateToken, create_user_onlogin);
+router.post("/groups", validateToken, create_Group);
 
 module.exports = router;
