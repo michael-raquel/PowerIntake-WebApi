@@ -1647,66 +1647,80 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 }
             }
 
-           if (note.isdocument && note.filename) {
-    try {
-        const fileRes = await axios.get(
-            `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})/documentbody/$value`,
-            {
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    Accept: "application/octet-stream",
-                    "OData-Version": "4.0",
-                    "OData-MaxVersion": "4.0",
-                },
-                responseType: "arraybuffer",
-            }
-        );
+        if (note.isdocument && note.filename) {
+            try {
+               
+                const fileRes = await axios.get(
+                    `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=documentbody,mimetype,filename`,
+                    {
+                        headers: {
+                            Authorization:      `Bearer ${token}`,
+                            Accept:             "application/json",
+                            "OData-Version":    "4.0",
+                            "OData-MaxVersion": "4.0",
+                        },
+                    }
+                );
 
-        const buffer       = Buffer.from(fileRes.data);
-        const blobName     = note.filename.replace(/[^a-zA-Z0-9.\-_]/g, '-');
+                const base64Data = fileRes.data?.documentbody ?? null;
 
-        const fileExt = (note.filename.split('.').pop() || '').toLowerCase();
-        const mimeMap = {
-            'png':  'image/png',
-            'jpg':  'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'gif':  'image/gif',
-            'webp': 'image/webp',
-            'svg':  'image/svg+xml',
-            'pdf':  'application/pdf',
-        };
+                if (!base64Data) {
+                    console.warn(`[WEBHOOK] No documentbody returned for annotation ${annotationid}`);
+                    return;
+                }
 
-        const mimetype = mimeMap[fileExt] || note.mimetype || 'application/octet-stream';
+                const buffer = Buffer.from(base64Data, "base64");
 
-        const blobServiceClient = BlobServiceClient.fromConnectionString(
-            process.env.AZURE_STORAGE_CONNECTION_STRING
-        );
-        const containerClient = blobServiceClient.getContainerClient(
-            process.env.AZURE_STORAGE_CONTAINER || "images"
-        );
-        await containerClient.createIfNotExists();
+                const fileExt = (note.filename.split('.').pop() || '').toLowerCase();
+                const mimeMap = {
+                    'png':  'image/png',
+                    'jpg':  'image/jpeg',
+                    'jpeg': 'image/jpeg',
+                    'gif':  'image/gif',
+                    'webp': 'image/webp',
+                    'svg':  'image/svg+xml',
+                    'pdf':  'application/pdf',
+                    'doc':  'application/msword',
+                    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    'xls':  'application/vnd.ms-excel',
+                    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'txt':  'text/plain',
+                    'zip':  'application/zip',
+                };
+                const mimetype = mimeMap[fileExt] || note.mimetype || 'application/octet-stream';
 
-        const blockBlobClient = containerClient.getBlockBlobClient(blobName);
-        await blockBlobClient.uploadData(buffer, {
-            blobHTTPHeaders: { blobContentType: mimetype }, 
-        });
+                const sanitizedName = note.filename.replace(/[^a-zA-Z0-9.\-_]/g, '-');
+                const blobName      = `${uuidv4()}-${sanitizedName}`;
 
-        const sharedKeyCredential = new StorageSharedKeyCredential(
-            process.env.AZURE_STORAGE_ACCOUNT_NAME,
-            process.env.AZURE_STORAGE_ACCOUNT_KEY
-        );
-        const sasToken = generateBlobSASQueryParameters(
-            {
-                containerName: process.env.AZURE_STORAGE_CONTAINER || "images",
-                blobName,
-                permissions: BlobSASPermissions.parse("r"),
-                startsOn:  new Date(),
-                expiresOn: new Date(new Date().valueOf() + 365 * 24 * 60 * 60 * 1000),
-            },
-            sharedKeyCredential
-        ).toString();
+                const blobServiceClient = BlobServiceClient.fromConnectionString(
+                    process.env.AZURE_STORAGE_CONNECTION_STRING
+                );
+                const containerClient = blobServiceClient.getContainerClient(
+                    process.env.AZURE_STORAGE_CONTAINER || "images"
+                );
+                await containerClient.createIfNotExists();
 
-        const blobUrl = `https://${process.env.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${process.env.AZURE_STORAGE_CONTAINER || "images"}/${blobName}?${sasToken}`;
+                const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+                await blockBlobClient.uploadData(buffer, {
+                    blobHTTPHeaders: { blobContentType: mimetype },
+                });
+
+                const sharedKeyCredential = new StorageSharedKeyCredential(
+                    process.env.AZURE_STORAGE_ACCOUNT_NAME,
+                    process.env.AZURE_STORAGE_ACCOUNT_KEY
+                );
+                const sasToken = generateBlobSASQueryParameters(
+                    {
+                        containerName: process.env.AZURE_STORAGE_CONTAINER || "images",
+                        blobName,
+                        permissions: BlobSASPermissions.parse("r"),
+                        startsOn:  new Date(),
+                        expiresOn: new Date(new Date().valueOf() + 365 * 24 * 60 * 60 * 1000),
+                    },
+                    sharedKeyCredential
+                ).toString();
+
+                const blobUrl = `https://${process.env.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${process.env.AZURE_STORAGE_CONTAINER || "images"}/${blobName}?${sasToken}`;
 
                 await client.query(
                     `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
@@ -1732,7 +1746,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 }
 
             } catch (attachErr) {
-                console.error(`[WEBHOOK] Attachment upload failed for ${annotationid}:`, attachErr.message);
+                console.error(`[WEBHOOK] Attachment upload failed for ${annotationid}:`, attachErr.message, attachErr.response?.data);
             }
         }
 
