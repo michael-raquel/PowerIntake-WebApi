@@ -1799,10 +1799,7 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
         await axios.patch(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
-            {
-                statecode:  0,       
-                statuscode: 196780008 
-            },
+            { statecode: 0, statuscode: 196780008 },
             {
                 headers: {
                     Authorization:      `Bearer ${token}`,
@@ -1815,6 +1812,39 @@ const reactivate_DynamicsTicket = async (req, res) => {
         );
 
         console.log(`[DYNAMICS] Ticket reactivated: ${dynamicsIncidentId}`);
+
+        const io = req.app.get("io");
+        if (io) {
+            try {
+                const ticketInfoResult = await client.query(
+                    `SELECT * FROM ticket_get_webhook_info($1::text[])`,
+                    [[dynamicsIncidentId]]
+                );
+                const ticketInfo = ticketInfoResult.rows[0] ?? null;
+
+                if (ticketInfo) {
+                    const updatedResult = await client.query(
+                        `SELECT * FROM public.ticket_get($1, NULL, NULL)`,
+                        [String(ticketuuid)]
+                    );
+                    const updatedTicket = updatedResult.rows[0] ?? null;
+
+                    const payload = {
+                        ticketuuid:         String(ticketuuid),
+                        dynamicsincidentid: dynamicsIncidentId,
+                        ticket:             updatedTicket,
+                    };
+
+                    if (ticketInfo.entrauserid) {
+                        io.to(ticketInfo.entrauserid).emit("ticket:reactivated", payload);
+                        console.log(`[WS] Emitted ticket:reactivated to: ${ticketInfo.entrauserid}`);
+                    }
+                }
+            } catch (wsErr) {
+                console.error("[REACTIVATE] Socket emit failed:", wsErr.message);
+            }
+        }
+
         return res.status(200).json({ message: "Ticket reactivated successfully", dynamicsIncidentId });
 
     } catch (err) {
