@@ -1,5 +1,6 @@
 const client = require("../config/db");
 
+
 const create_Tenant = async (req, res) => {
   try {
     const {
@@ -8,9 +9,8 @@ const create_Tenant = async (req, res) => {
       tenantemail,
       createdby,
       dynamicsaccountid,
-      superadmingroupid,
       admingroupid,
-      companyallgroupid,
+      usergroupid,
     } = req.body;
 
     const finalTenantId = entratenantid || null;
@@ -23,16 +23,15 @@ const create_Tenant = async (req, res) => {
     }
 
     const result = await client.query(
-      "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7, $8) AS tenantuuid",
+      "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7) AS tenantuuid",
       [
         finalTenantId,
         tenantname,
         tenantemail || null,
         finalCreatedBy || null,
         dynamicsaccountid || null,
-        superadmingroupid || null,
         admingroupid || null,
-        companyallgroupid || null,
+        usergroupid || null,
       ],
     );
 
@@ -60,19 +59,14 @@ const get_Tenants = async (req, res) => {
       isactive,
     } = req.query;
 
-    const parseBool = (value, key) => {
-      if (value === undefined || value === null || value === "") return null;
-      if (value === "true") return true;
-      if (value === "false") return false;
-      throw new Error(`VALIDATION_ERROR: ${key} must be true or false`);
-    };
+
 
     const parsedTenantId =
       tenantid === undefined || tenantid === null || tenantid === ""
         ? null
-        : Number(tenantid);
+        : String(tenantid);
 
-    if (parsedTenantId !== null && Number.isNaN(parsedTenantId)) {
+    if (parsedTenantId !== null && isNaN(Number(parsedTenantId))) {
       return res
         .status(400)
         .json({ error: "VALIDATION_ERROR: tenantid must be a number" });
@@ -84,12 +78,27 @@ const get_Tenants = async (req, res) => {
         parsedTenantId,
         entratenantid || null,
         dynamicsaccountid || null,
-        parseBool(isconsented, "isconsented"),
-        parseBool(isactive, "isactive"),
+        isconsented || null,
+        isactive || null,
       ],
     );
 
-    return res.status(200).json(result.rows);
+    const rows = result.rows.map((row) => ({
+      tenantid: row.v_tenantid,
+      tenantuuid: row.v_tenantuuid,
+      entratenantid: row.v_entratenantid,
+      tenantname: row.v_tenantname,
+      tenantemail: row.v_tenantemail,
+      createdat: row.v_createdat,
+      createdby: row.v_createdby,
+      dynamicsaccountid: row.v_dynamicsaccountid,
+      admingroupid: row.v_admingroupid,
+      usergroupid: row.v_usergroupid,
+      isconsented: row.v_isconsented,
+      isactive: row.v_isactive,
+    }));
+
+    return res.status(200).json(rows);
   } catch (err) {
     console.error("get_Tenants error:", err.message);
 

@@ -64,11 +64,9 @@
  *                 createdby: "aabbccdd-1234-5678-abcd-ef1234567890"
  *                 dynamicsaccountid: "5f00ecfd-7fd2-f011-8c4d-7c1e520d4978"
  *                 admingroupid: "group-id-value"
- *                 superadmingroupid: "superadmin-group-id-value"
- *                 companyallgroupid: "company-all-group-id-value"
+ *                 usergroupid: "user-group-id-value"
  *                 isconsented: true
  *                 isactive: true
- *                 clientid: "client-id-value"
  *       400:
  *         description: Validation Error
  *         content:
@@ -114,9 +112,8 @@
  *             tenantemail: "admin@contoso.ph"
  *             createdby: "aabbccdd-1234-5678-abcd-ef1234567890"
  *             dynamicsaccountid: "5f00ecfd-7fd2-f011-8c4d-7c1e520d4978"
- *             superadmingroupid: "superadmin-group-id-value"
  *             admingroupid: "group-id-value"
- *             companyallgroupid: "company-all-group-id-value"
+ *             usergroupid: "user-group-id-value"
  *     responses:
  *       201:
  *         description: Successfully created, returns tenant UUID
@@ -140,7 +137,7 @@
  *               missingFields:
  *                 summary: Required fields are missing
  *                 value:
- *                   error: "entratenantid, tenantname, tenantemail, and createdby are required"
+ *                   error: "entratenantid and tenantname are required"
  *       401:
  *         description: Unauthorized
  *         content:
