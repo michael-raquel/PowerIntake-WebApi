@@ -382,6 +382,7 @@ const create_Ticket = async (req, res) => {
     syncToDynamics({
       io,
      entrauserid, 
+      entratenantid,
       token,
       ticketuuid,
       dynamicsAccountId,
@@ -408,12 +409,55 @@ const create_Ticket = async (req, res) => {
   }
 };
     
+
 const syncToDynamics = async ({
-    io, token, entrauserid, ticketuuid, dynamicsAccountId,
+    io, token, entrauserid, entratenantid, ticketuuid, dynamicsAccountId,
     userInfo, title, description, usertimezone,
     date, starttime, endtime, contactid, attachments
 }) => {
     const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
+
+    if (!dynamicsAccountId) {
+        try {
+            const tenantRes = await client.query(
+                "SELECT * FROM public.tenant WHERE entratenantid = $1",
+                [entratenantid]
+            );
+            const tenant = tenantRes.rows[0];
+
+            if (tenant) {
+                const createAccountRes = await axios.post(
+                    `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts`,
+                    {
+                        name:          tenant.tenantname,
+                        emailaddress1: tenant.tenantemail ?? null,
+                    },
+                    {
+                        headers: {
+                            Authorization:      `Bearer ${token}`,
+                            Accept:             "application/json",
+                            "Content-Type":     "application/json",
+                            "OData-Version":    "4.0",
+                            "OData-MaxVersion": "4.0",
+                            Prefer:             "return=representation",
+                        },
+                    }
+                );
+
+                dynamicsAccountId = createAccountRes.data?.accountid ?? null;
+                console.log("[DYNAMICS] Tenant account created:", dynamicsAccountId);
+
+                if (dynamicsAccountId) {
+                    await client.query(
+                        "SELECT public.tenant_update_dynamicsaccountid($1, $2)",
+                        [entratenantid, dynamicsAccountId]
+                    );
+                }
+            }
+        } catch (tenantErr) {
+            console.error("[DYNAMICS] Failed to create tenant account:", tenantErr.response?.data || tenantErr.message);
+        }
+    }
 
     const dynamicsPayload = {
         "title":             title,
@@ -451,12 +495,12 @@ const syncToDynamics = async ({
         const ownerId = ownerRes.data.value?.[0]?.systemuserid ?? null;
         if (ownerId) {
             dynamicsPayload["ownerid@odata.bind"] = `/systemusers(${ownerId})`;
-            console.log("Owner resolved:", ownerId);
+            console.log("[DYNAMICS] Owner resolved:", ownerId);
         } else {
-            console.warn("Owner not found for Joseph@SpartaServ.com");
+            console.warn("[DYNAMICS] Owner not found for Joseph@SpartaServ.com");
         }
     } catch (ownerErr) {
-        console.error("Failed to resolve owner:", ownerErr.response?.data || ownerErr.message);
+        console.error("[DYNAMICS] Failed to resolve owner:", ownerErr.response?.data || ownerErr.message);
     }
 
     if (contactid) {
@@ -478,7 +522,7 @@ const syncToDynamics = async ({
             let dynamicsContactId = contactRes.data.value?.[0]?.contactid ?? null;
 
             if (!dynamicsContactId) {
-                console.warn(`No Dynamics contact found for ${userInfo.useremail} — creating...`);
+                console.warn(`[DYNAMICS] No contact found for ${userInfo.useremail} — creating...`);
 
                 const nameParts = (userInfo.username ?? "").trim().split(/\s+/);
                 const firstname = nameParts.length > 1 ? nameParts[0] : null;
@@ -488,12 +532,12 @@ const syncToDynamics = async ({
                     `${process.env.DYNAMICS_URL}/api/data/v9.2/contacts`,
                     {
                         emailaddress1: userInfo.useremail,
-                        firstname:     firstname,
-                        lastname:      lastname,
-                        jobtitle:      userInfo.jobtitle      ?? null,
-                        telephone1:    userInfo.businessphone ?? null,
-                        mobilephone:   userInfo.mobilephone   ?? null,
-                        department:    userInfo.department    ?? null,
+                        firstname,
+                        lastname,
+                        jobtitle:    userInfo.jobtitle      ?? null,
+                        telephone1:  userInfo.businessphone ?? null,
+                        mobilephone: userInfo.mobilephone   ?? null,
+                        department:  userInfo.department    ?? null,
                         ...(dynamicsAccountId && {
                             "parentcustomerid_account@odata.bind": `/accounts(${dynamicsAccountId})`
                         }),
@@ -505,13 +549,13 @@ const syncToDynamics = async ({
                             "Content-Type":     "application/json",
                             "OData-Version":    "4.0",
                             "OData-MaxVersion": "4.0",
-                            "Prefer":           "return=representation",
+                            Prefer:             "return=representation",
                         }
                     }
                 );
 
                 dynamicsContactId = createContactRes.data?.contactid ?? null;
-                console.log("Contact created in Dynamics:", dynamicsContactId);
+                console.log("[DYNAMICS] Contact created:", dynamicsContactId);
             }
 
             if (dynamicsContactId) {
@@ -519,7 +563,7 @@ const syncToDynamics = async ({
             }
 
         } catch (contactErr) {
-            console.error("Failed to resolve/create Dynamics contact:", contactErr.response?.data || contactErr.message);
+            console.error("[DYNAMICS] Failed to resolve/create contact:", contactErr.response?.data || contactErr.message);
         }
     }
 
@@ -533,78 +577,71 @@ const syncToDynamics = async ({
                 "Content-Type":     "application/json",
                 "OData-Version":    "4.0",
                 "OData-MaxVersion": "4.0",
-               Prefer: 'return=representation, odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
+                Prefer: 'return=representation, odata.include-annotations="OData.Community.Display.V1.FormattedValue"'
             }
         }
     );
 
     const dynamicsIncidentId   = dynamicsRes.data?.incidentid  ?? null;
     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
-    const statusCode           = dynamicsRes.data?.statuscode   ?? null;
-    const dynamicsStatus       = DYNAMICS_STATUSCODE_MAP[statusCode] ?? "New";
-    // const sourceCode  = dynamicsRes.data?.ss_source ?? null;
-    const sourceLabel = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"] ?? null;
-    const category = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]  ?? null;
-    const duedate = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"] ?? null;
-    const priority = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]  ?? null;
-    const ticketlifecycle = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const dynamicsStatus       = dynamicsRes.data?.["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const ticketStatus       = dynamicsRes.data?.["statecode@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const sourceLabel          = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"]              ?? null;
+    const category             = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]      ?? null;
+    const duedate              = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"]             ?? null;
+    const priority             = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]           ?? null;
+    const ticketlifecycle      = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"]         ?? null;
 
-    console.log("Dynamics incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle });
+    console.log("[DYNAMICS] Incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus });
 
-   if (dynamicsIncidentId) {
+    if (dynamicsIncidentId) {
         await client.query(
-            "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
+            "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, ticketStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
         );
 
         const updated = await client.query(
-        "SELECT * FROM public.ticket_get($1, NULL, NULL)",
-        [ticketuuid]
+            "SELECT * FROM public.ticket_get($1, NULL, NULL)",
+            [ticketuuid]
         );
 
         if (io && entrauserid && updated.rows[0]) {
-        io.to(entrauserid).emit("ticket:synced", {
-            ticketuuid,
-            ticket: updated.rows[0],
-        });
-        console.log("[WS] Emitted ticket:synced to:", entrauserid);
+            io.to(entrauserid).emit("ticket:synced", {
+                ticketuuid,
+                ticket: updated.rows[0],
+            });
+            console.log("[WS] Emitted ticket:synced to:", entrauserid);
         }
 
+        const attachmentList = toArray(attachments);
+        if (attachmentList.length > 0) {
+            const annotationIds = await Promise.all(
+                attachmentList.map(blobUrl =>
+                    syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
+                )
+            ).catch(err => {
+                console.error("[DYNAMICS] Attachment sync failed:", err.message);
+                return [];
+            });
 
-       const attachmentList = toArray(attachments);
-    if (attachmentList.length > 0) {
-     
+            for (let i = 0; i < attachmentList.length; i++) {
+                const annotationid = annotationIds[i];
+                const blobUrl      = attachmentList[i];
 
-        const annotationIds = await Promise.all(
-            attachmentList.map(blobUrl =>
-                syncAttachmentToDynamics({ token, dynamicsIncidentId, blobUrl })
-            )
-        ).catch(err => {
-            console.error("[DYNAMICS] Attachment sync failed:", err.message);
-            return [];
-        });
+                if (!annotationid) {
+                    console.warn(`[DYNAMICS] No annotationid for index ${i}, skipping`);
+                    continue;
+                }
 
-        console.log(`[DYNAMICS] Returned annotationIds:`, annotationIds);
-
-        for (let i = 0; i < attachmentList.length; i++) {
-            const annotationid = annotationIds[i];
-            const blobUrl      = attachmentList[i];
-
-            if (!annotationid) {
-                console.warn(`[DYNAMICS] No annotationid returned for index ${i}, skipping`);
-                continue;
+                try {
+                    await client.query(
+                        `SELECT public.attachment_update_annotation($1, $2)`,
+                        [blobUrl, annotationid]
+                    );
+                } catch (e) {
+                    console.error(`[DYNAMICS] Failed to save annotationid for ${blobUrl}:`, e.message);
+                }
             }
-
-            try {
-                const updateResult = await client.query(
-                    `SELECT public.attachment_update_annotation($1, $2)`,
-                    [blobUrl, annotationid]
-                );
-             
-            } catch (e) {
-                console.error(`[DYNAMICS] Failed to save annotationid for ${blobUrl}:`, e.message);
-            }
-        }
         }
     }
 };
@@ -809,11 +846,12 @@ const db_batchUpsertUsers = async (contactMap) => {
     const departments    = contacts.map(([, c])    => c.department    ?? null);
     const userroles      = contacts.map(()         => "user");
     const entratenantids = contacts.map(([, c])    => c.entraTenantId ?? null);
+    const entrauserids = contacts.map(([, c]) => c.entrauserid ?? null);
 
     try {
         await client.query(
-            `SELECT public.batch_user_insert($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [emails, usernames, jobtitles, businessphones, mobilephones, departments, userroles, entratenantids]
+            `SELECT public.batch_user_insert($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [emails, usernames, jobtitles, businessphones, mobilephones, departments, userroles, entratenantids, entrauserids]
         );
     } catch (e) {
         throw e;
@@ -840,7 +878,10 @@ const db_loadUserMap = async () => {
         return Object.fromEntries(
             result.rows
                 .filter(r => r.useremail != null)
-                .map(r => [r.useremail, r.userid])  
+                .map(r => [r.useremail, { 
+                    userid:       r.userid, 
+                    entrauserid:  r.entrauserid ?? null,
+                }])
         );
     } catch (e) {
         console.error("db_loadUserMap failed:", e.message);
@@ -848,11 +889,11 @@ const db_loadUserMap = async () => {
     }
 };
 
-const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
-    const statusCode  = ticket.statuscode ?? null;
-    const statusLabel = DYNAMICS_STATUSCODE_MAP[statusCode]
-                     ?? ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]
-                     ?? null;
+const db_syncTicket = async (ticket, tenantid, userid, technicianname, entrauserid) => {
+
+    const statusLabel =ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]
+
+    const ticketstatus = ticket["statecode@OData.Community.Display.V1.FormattedValue"] ?? null;
                      
     const createdby = ticket.ss_Contact?.emailaddress1 ?? null;
 
@@ -861,7 +902,7 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
             $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-            $31,$32,$33,$34,$35,$36,$37,$38,$39,$40
+            $31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41
         )`,
         [
             ticket.incidentid,
@@ -897,6 +938,7 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname) => {
             ticket["ss_tickettype@OData.Community.Display.V1.FormattedValue"]                               ?? null,
             ticket["prioritycode@OData.Community.Display.V1.FormattedValue"]                                ?? null,
             statusLabel,
+            ticketstatus,
             ticket.ss_quickfixflag                                                                          ?? null,
             ticket.ss_reason                                                                                ?? null,
             ticket.ss_resolveddate                                                                          ?? null,
@@ -940,10 +982,11 @@ const db_syncTicketNotes = async (ticket, token) => {
     if (!ticket.incidentid) return;
 
     try {
-       const url = `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`
-          + `?$filter=_objectid_value eq ${ticket.incidentid}`
-          + `&$select=annotationid,subject,notetext,createdon,modifiedon,_objectid_value`
-          + `&$expand=createdby($select=internalemailaddress)`; 
+        const url = `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`
+            + `?$filter=_objectid_value eq ${ticket.incidentid}`
+            + `&$select=annotationid,subject,notetext,createdon,modifiedon,_objectid_value`
+            + `&$expand=createdby($select=internalemailaddress)`;
+
         const notesRes = await axios.get(url, {
             headers: {
                 Authorization: `Bearer ${token}`,
@@ -958,35 +1001,83 @@ const db_syncTicketNotes = async (ticket, token) => {
 
         if (notes.length === 0) return;
 
-        for (const note of notes) {
-            try {
-                const annotationid = note.annotationid ?? null;
-                const dynamicsincidentid = note._objectid_value ?? null;
-                const subject = note.subject ?? 'Note';
-                const notetext = stripHtml(note.notetext) ?? '';
-                const createdon = note.createdon ?? new Date().toISOString();
-                const modifiedon = note.modifiedon ?? createdon;
-                const createdby  = note.createdby?.internalemailaddress  ?? null;
-                const modifiedby = null; 
-
-                if (!annotationid || !dynamicsincidentid) {
-                    console.warn(`[NOTES] Skipping note due to missing IDs: ticket ${ticket.ticketnumber}`);
-                    continue;
-                }
-
-                await client.query(
-                    `SELECT public.note_sync_dynamics_batch($1, $2, $3, $4, $5, $6, $7, $8)`,
-                    [[annotationid], [dynamicsincidentid], [subject], [notetext], [createdon], [modifiedon], [createdby], [modifiedby]]
-                );
-
-            } catch (noteErr) {
-                console.warn(`[NOTES] Failed for ticket ${ticket.ticketnumber}, annotation ${note.annotationid}:`, noteErr.response?.data || noteErr.message);
+        const valid = notes.filter(n => {
+            if (!n.annotationid || !n._objectid_value) {
+                console.warn(`[NOTES] Skipping note due to missing IDs: ticket ${ticket.ticketnumber}`);
+                return false;
             }
-        }
+            return true;
+        });
+
+        if (valid.length === 0) return;
+
+        const annotationids      = valid.map(n => n.annotationid);
+        const dynamicsincidentids = valid.map(n => n._objectid_value);
+        const subjects           = valid.map(n => n.subject ?? 'Note');
+        const notetexts          = valid.map(n => stripHtml(n.notetext) ?? '');
+        const createdon          = valid.map(n => n.createdon ?? new Date().toISOString());
+        const modifiedon         = valid.map(n => n.modifiedon ?? n.createdon ?? new Date().toISOString());
+        const createdby          = valid.map(n => n.createdby?.internalemailaddress ?? null);
+        const modifiedby         = valid.map(() => null);
+
+        await client.query(
+            `SELECT public.note_sync_dynamics_batch($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [annotationids, dynamicsincidentids, subjects, notetexts, createdon, modifiedon, createdby, modifiedby]
+        );
+
+        console.log(`[NOTES] Batch synced ${valid.length} notes for ${ticket.ticketnumber}`);
 
     } catch (noteErr) {
-        console.warn(`[NOTES] Failed fetching notes for ${ticket.ticketnumber}:`, noteErr.response?.data || noteErr.message);
+        console.warn(`[NOTES] Failed fetching/syncing notes for ${ticket.ticketnumber}:`, noteErr.response?.data || noteErr.message);
     }
+};
+
+const contactMapWithEntraIds = async (contactMap, token) => {
+    if (contactMap.size === 0) return contactMap;
+
+    const emails = [...contactMap.keys()];
+    const chunkSize = 10;
+
+    for (let i = 0; i < emails.length; i += chunkSize) {
+        const chunk = emails.slice(i, i + chunkSize);
+
+        try {
+            const filter = chunk
+                .map(email => `internalemailaddress eq '${email}'`)
+                .join(' or ');
+
+            const res = await axios.get(
+                `${process.env.DYNAMICS_URL}/api/data/v9.2/systemusers?$filter=${encodeURIComponent(filter)}&$select=internalemailaddress,azureactivedirectoryobjectid`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        Accept: "application/json",
+                        "OData-Version": "4.0",
+                        "OData-MaxVersion": "4.0",
+                    }
+                }
+            );
+
+            const dynamicsUsers = res.data.value ?? [];
+
+            for (const dUser of dynamicsUsers) {
+                const email = dUser.internalemailaddress ?? null;
+                const entraId = dUser.azureactivedirectoryobjectid ?? null;
+                if (!email || !entraId) continue;
+
+                const contact = contactMap.get(email) ?? contactMap.get(email.toLowerCase());
+                if (contact) {
+                    contact.entrauserid = entraId;
+                    console.log(`[DYNAMICS] Mapped entrauserid for ${email}: ${entraId}`);
+                }
+            }
+
+        } catch (err) {
+            console.warn(`[ENTRA] Failed to enrich chunk ${i}:`, err.response?.data || err.message);
+        }
+    }
+
+    return contactMap;
 };
 
 const sync_DynamicsTickets_toDB = async (req, res) => {
@@ -1024,9 +1115,15 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
 
         await db_batchUpsertTenants(buildAccountMap(filtered));
         const tenantMap = await db_loadTenantMap();
-        await db_batchUpsertUsers(buildContactMap(filtered));
+
+        const contactMap = buildContactMap(filtered);
+        await contactMapWithEntraIds(contactMap, token); 
+        
+        await db_batchUpsertUsers(contactMap);
         const userMap = await db_loadUserMap();
         const technicianMap = await resolveTechnicianNames(filtered, token);
+
+      
 
         let synced = 0;
         let skipped = 0;
@@ -1041,11 +1138,13 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
                     continue;
                 }
 
-                const contactEmail = ticket.ss_Contact?.emailaddress1 ?? null;
-                const userid = contactEmail ? (userMap[contactEmail] ?? null) : null;
+                const contactEmail   = ticket.ss_Contact?.emailaddress1 ?? null;
+                const userEntry      = contactEmail ? (userMap[contactEmail] ?? null) : null;
+                const userid         = userEntry?.userid      ?? null;
+                const entrauserid    = userEntry?.entrauserid ?? null;
                 const technicianname = technicianMap[ticket._ss_assignedtechnician_value] ?? null;
 
-                await db_syncTicket(ticket, tenantid, userid, technicianname);
+                await db_syncTicket(ticket, tenantid, userid, technicianname, entrauserid);
 
                 db_syncTicketNotes(ticket, token).catch(err => {
                     console.warn(`[NOTES] Background sync failed for ${ticket.ticketnumber}:`, err.message);
@@ -1139,7 +1238,10 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
         await db_batchUpsertTenants(buildAccountMap(filtered));
         const tenantMap = await db_loadTenantMap();
 
-        await db_batchUpsertUsers(buildContactMap(filtered));
+        const contactMap = buildContactMap(filtered);
+        await contactMapWithEntraIds(contactMap, token); 
+        await db_batchUpsertUsers(contactMap);
+
         const userMap = await db_loadUserMap();
 
         const technicianMap = await resolveTechnicianNames(filtered, token);
@@ -1158,10 +1260,12 @@ const sync_DynamicsTickets_toDB_auto = async (req, res) => {
                 }
 
                 const contactEmail = ticket.ss_Contact?.emailaddress1 ?? null;
-                const userid = contactEmail ? (userMap[contactEmail] ?? null) : null;
                 const technicianname = technicianMap[ticket._ss_assignedtechnician_value] ?? null;
+                const userEntry   = contactEmail ? (userMap[contactEmail] ?? null) : null;
+                const userid      = userEntry?.userid      ?? null;
+                const entrauserid = userEntry?.entrauserid ?? null;
 
-                await db_syncTicket(ticket, tenantid, userid, technicianname);
+                await db_syncTicket(ticket, tenantid, userid, technicianname, entrauserid);
                 await db_syncTicketNotes(ticket, token);
                 synced++;
                 
@@ -1250,14 +1354,15 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
             }
         }
 
-        const statusCode  = ticket.statuscode ?? null;
-        const statusLabel = DYNAMICS_STATUSCODE_MAP[statusCode] ?? null;
+        // const statusCode  = ticket.statuscode ?? null;
+        // const statusLabel = DYNAMICS_STATUSCODE_MAP[statusCode] ?? null;
+        
 
         await client.query(
             `SELECT public.ticket_webhook_update(
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32
+                $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
             )`,
             [
                 ticket.incidentid,                                                                                   // $1
@@ -1287,11 +1392,12 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
                 ticket["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]                       ?? null, // $25
                 ticket["ss_tickettype@OData.Community.Display.V1.FormattedValue"]                           ?? null, // $26
                 ticket["prioritycode@OData.Community.Display.V1.FormattedValue"]                            ?? null, // $27
-                statusLabel,                                                                                          // $28
-                ticket.ss_quickfixflag?.toString()                                                         ?? null, // $29
-                ticket.ss_reason                                                                            ?? null, // $30
-                ticket.ss_completedonautotask                                                               ?? null, // $31
-                ticket.ss_resolution                                                                        ?? null, // $32
+                ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]                 ?? null,// $28
+                ticket["statecode@OData.Community.Display.V1.FormattedValue"]                           ?? null,// $29
+                ticket.ss_quickfixflag?.toString()                                                          ?? null, // $30
+                ticket.ss_reason                                                                            ?? null, // $31
+                ticket.ss_completedonautotask                                                               ?? null, // $32
+                ticket.ss_resolution                                                                        ?? null, // $33
             ]
         );
 
@@ -1327,10 +1433,10 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
                         console.log(`[WS] Emitted ticket:updated to user: ${entrauserid}`);
                     }
 
-                    if (entratenantid) {
-                        io.to(entratenantid).emit("ticket:updated", payload);
-                        console.log(`[WS] Emitted ticket:updated to tenant: ${entratenantid}`);
-                    }
+                    // if (entratenantid) {
+                    //     io.to(entratenantid).emit("ticket:updated", payload);
+                    //     console.log(`[WS] Emitted ticket:updated to tenant: ${entratenantid}`);
+                    // }
                 }
             } catch (wsErr) {
                 console.error("[WEBHOOK] Socket emit failed:", wsErr.message);
@@ -1401,10 +1507,10 @@ const webhook_DynamicsTicketDelete = async (req, res) => {
                     console.log(`[WS] Emitted ticket:deleted to user: ${entrauserid}, ticketuuid: ${ticketuuid}`);
                 }
 
-                if (entratenantid) {
-                    io.to(entratenantid).emit("ticket:deleted", payload);
-                    console.log(`[WS] Emitted ticket:deleted to tenant: ${entratenantid}`);
-                }
+                // if (entratenantid) {
+                //     io.to(entratenantid).emit("ticket:deleted", payload);
+                //     console.log(`[WS] Emitted ticket:deleted to tenant: ${entratenantid}`);
+                // }
             }
         }
 
@@ -1444,6 +1550,8 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             return res.status(400).json({ error: "Empty request body" });
         }
 
+        const io = req.app.get("io");
+
         const annotationid = body?.PrimaryEntityId ?? null;
         if (!annotationid) {
             return res.status(400).json({ error: "Missing PrimaryEntityId in payload" });
@@ -1472,7 +1580,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             const token = await getDynamicsToken();
 
             const noteRes = await axios.get(
-                `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=annotationid,subject,notetext,createdon,modifiedon,isdocument,filename,mimetype,documentbody,_objectid_value&$expand=createdby($select=internalemailaddress)`,
+                `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=annotationid,subject,notetext,createdon,modifiedon,isdocument,filename,mimetype,_objectid_value&$expand=createdby($select=internalemailaddress)`,
                 {
                     headers: {
                         Authorization: `Bearer ${token}`,
@@ -1503,6 +1611,13 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             const ticketid  = ticketRes.rows[0]?.ticketid ?? null;
             const createdby = note.createdby?.internalemailaddress ?? null;
 
+             const ticketInfoResult = await client.query(
+                `SELECT * FROM ticket_get_webhook_info($1::text[])`,
+                [[incidentid]]
+            );
+
+                const ticketInfo = ticketInfoResult.rows[0] ?? null;
+
             const results = {
                 annotationid,
                 note:       false,
@@ -1524,64 +1639,112 @@ const webhook_DynamicsNoteSync = async (req, res) => {
 
                 results.note = true;
                 console.log(`[WEBHOOK] Note synced (${messageName}): ${annotationid}`);
-            }
 
-            if (note.isdocument && note.documentbody && note.filename) {
-                try {
-                    const buffer   = Buffer.from(note.documentbody, "base64");
-                    const mimetype = note.mimetype || "application/octet-stream";
-                    const ext      = note.filename.split('.').pop();
-                    const blobName = `${uuidv4()}.${ext}`;
-
-                    const blobServiceClient = BlobServiceClient.fromConnectionString(
-                        process.env.AZURE_STORAGE_CONNECTION_STRING
-                    );
-                    const containerClient = blobServiceClient.getContainerClient(
-                        process.env.AZURE_STORAGE_CONTAINER || "images"
-                    );
-                    await containerClient.createIfNotExists();
-
-                    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
-                    await blockBlobClient.uploadData(buffer, {
-                        blobHTTPHeaders: { blobContentType: mimetype },
+                 if (io && ticketInfo?.entrauserid) {
+                    io.to(ticketInfo.entrauserid).emit("note:synced", {
+                        ticketuuid:  String(ticketInfo.ticketuuid),
+                        annotationid,
+                        messageName,
                     });
-
-                    const sharedKeyCredential = new StorageSharedKeyCredential(
-                        process.env.AZURE_STORAGE_ACCOUNT_NAME,
-                        process.env.AZURE_STORAGE_ACCOUNT_KEY
-                    );
-                    const sasToken = generateBlobSASQueryParameters(
-                        {
-                            containerName: process.env.AZURE_STORAGE_CONTAINER || "images",
-                            blobName,
-                            permissions: BlobSASPermissions.parse("r"),
-                            startsOn:  new Date(),
-                            expiresOn: new Date(new Date().valueOf() + 365 * 24 * 60 * 60 * 1000),
-                        },
-                        sharedKeyCredential
-                    ).toString();
-
-                    const blobUrl = `https://${process.env.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${process.env.AZURE_STORAGE_CONTAINER || "images"}/${blobName}?${sasToken}`;
-
-                    await client.query(
-                        `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
-                        [
-                            note.annotationid,
-                            ticketid,
-                            blobUrl,          
-                            note.createdon ?? null,
-                            createdby,
-                        ]
-                    );
-
-                    results.attachment = true;
-                    console.log(`[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${note.filename}`);
-
-                } catch (attachErr) {
-                    console.error(`[WEBHOOK] Attachment upload failed for ${annotationid}:`, attachErr.message);
-            
+                    console.log(`[WS] Emitted note:synced to: ${ticketInfo.entrauserid}`);
                 }
             }
+
+                if (note.isdocument && note.filename) {
+                try {
+                    
+                    const bodyRes = await axios.get(
+                        `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=documentbody`,
+                        {
+                            headers: {
+                                Authorization:      `Bearer ${token}`,
+                                Accept:             "application/json",
+                                "OData-Version":    "4.0",
+                                "OData-MaxVersion": "4.0",
+                            },
+                        }
+                    );
+
+                    const base64Data = bodyRes.data?.documentbody ?? null;
+
+                    if (!base64Data) {
+                        console.warn(`[WEBHOOK] No documentbody for ${annotationid} — skipping`);
+                    } else {
+                        const buffer = Buffer.from(base64Data, "base64");
+
+                        const fileExt = (note.filename.split('.').pop() || '').toLowerCase();
+                        const mimeMap = {
+                            'png':  'image/png',
+                            'jpg':  'image/jpeg',
+                            'jpeg': 'image/jpeg',
+                            'gif':  'image/gif',
+                            'webp': 'image/webp',
+                            'svg':  'image/svg+xml',
+                            'pdf':  'application/pdf',
+                            'doc':  'application/msword',
+                            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                            'xls':  'application/vnd.ms-excel',
+                            'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            'txt':  'text/plain',
+                            'zip':  'application/zip',
+                        };
+                        const mimetype = mimeMap[fileExt] || note.mimetype || 'application/octet-stream';
+
+                        const sanitizedName = note.filename.replace(/[^a-zA-Z0-9.\-_]/g, '-');
+                        const blobName      = `${uuidv4()}-${sanitizedName}`;
+
+                        const blobServiceClient = BlobServiceClient.fromConnectionString(
+                            process.env.AZURE_STORAGE_CONNECTION_STRING
+                        );
+                        const containerClient = blobServiceClient.getContainerClient(
+                            process.env.AZURE_STORAGE_CONTAINER || "images"
+                        );
+                        await containerClient.createIfNotExists();
+
+                        const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+                        await blockBlobClient.uploadData(buffer, {
+                            blobHTTPHeaders: { blobContentType: mimetype },
+                        });
+
+                        const sharedKeyCredential = new StorageSharedKeyCredential(
+                            process.env.AZURE_STORAGE_ACCOUNT_NAME,
+                            process.env.AZURE_STORAGE_ACCOUNT_KEY
+                        );
+                        const sasToken = generateBlobSASQueryParameters(
+                            {
+                                containerName: process.env.AZURE_STORAGE_CONTAINER || "images",
+                                blobName,
+                                permissions: BlobSASPermissions.parse("r"),
+                                startsOn:  new Date(),
+                                expiresOn: new Date(new Date().valueOf() + 365 * 24 * 60 * 60 * 1000),
+                            },
+                            sharedKeyCredential
+                        ).toString();
+
+                        const blobUrl = `https://${process.env.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/${process.env.AZURE_STORAGE_CONTAINER || "images"}/${blobName}?${sasToken}`;
+
+                        await client.query(
+                            `SELECT public.attachment_webhook_sync($1, $2, $3, $4, $5)`,
+                            [note.annotationid, ticketid, blobUrl, note.createdon ?? null, createdby]
+                        );
+
+                        results.attachment = true;
+                        console.log(`[WEBHOOK] Attachment synced (${messageName}): ${annotationid} → ${note.filename} [${mimetype}]`);
+
+                        if (io && ticketInfo?.entrauserid) {
+                            io.to(ticketInfo.entrauserid).emit("attachment:synced", {
+                                ticketuuid:   String(ticketInfo.ticketuuid),
+                                annotationid,
+                                messageName,
+                            });
+                            console.log(`[WS] Emitted attachment:synced to: ${ticketInfo.entrauserid}`);
+                        }
+                    }
+                } catch (attachErr) {
+                    console.error(`[WEBHOOK] Attachment upload failed for ${annotationid}:`, attachErr.message, attachErr.response?.data);
+                }
+            }
+
 
             return res.status(200).json({
                 message: `Annotation ${messageName}d successfully`,
@@ -1636,10 +1799,7 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
         await axios.patch(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
-            {
-                statecode:  0,       
-                statuscode: 196780008 
-            },
+            { statecode: 0, statuscode: 196780008 },
             {
                 headers: {
                     Authorization:      `Bearer ${token}`,
@@ -1652,6 +1812,39 @@ const reactivate_DynamicsTicket = async (req, res) => {
         );
 
         console.log(`[DYNAMICS] Ticket reactivated: ${dynamicsIncidentId}`);
+
+        const io = req.app.get("io");
+        if (io) {
+            try {
+                const ticketInfoResult = await client.query(
+                    `SELECT * FROM ticket_get_webhook_info($1::text[])`,
+                    [[dynamicsIncidentId]]
+                );
+                const ticketInfo = ticketInfoResult.rows[0] ?? null;
+
+                if (ticketInfo) {
+                    const updatedResult = await client.query(
+                        `SELECT * FROM public.ticket_get($1, NULL, NULL)`,
+                        [String(ticketuuid)]
+                    );
+                    const updatedTicket = updatedResult.rows[0] ?? null;
+
+                    const payload = {
+                        ticketuuid:         String(ticketuuid),
+                        dynamicsincidentid: dynamicsIncidentId,
+                        ticket:             updatedTicket,
+                    };
+
+                    if (ticketInfo.entrauserid) {
+                        io.to(ticketInfo.entrauserid).emit("ticket:reactivated", payload);
+                        console.log(`[WS] Emitted ticket:reactivated to: ${ticketInfo.entrauserid}`);
+                    }
+                }
+            } catch (wsErr) {
+                console.error("[REACTIVATE] Socket emit failed:", wsErr.message);
+            }
+        }
+
         return res.status(200).json({ message: "Ticket reactivated successfully", dynamicsIncidentId });
 
     } catch (err) {

@@ -1,5 +1,6 @@
 
 const tokenCache = new Map();
+const axios = require('axios');
 
 async function getAccessToken(tenantId) {
   const tid = tenantId || process.env.AZURE_TENANT_ID;

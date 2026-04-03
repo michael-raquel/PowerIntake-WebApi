@@ -2,6 +2,7 @@ const axios = require('axios');
 const { getAccessToken } = require('../config/authService');
 const { resolveRoleName } = require('../config/groupRoleMap');
 const client = require("../config/db");
+const { getDynamicsToken } = require('../utils/dynamicsToken');
 
 const GRAPH_URL = 'https://graph.microsoft.com/v1.0';
 const USER_FIELDS = [
@@ -312,14 +313,28 @@ const get_User_Info = async (req, res) => {
 const update_UserRole = async (req, res) => {
   try {
     const { entrauserid, userrole, modifiedby } = req.body;
-
+    //Will remove this if it fails -jasper
+    if (!entrauserid) {
+      return res.status(400).json({ error: "entrauserid is required" });
+    }
+    //
     const result = await client.query(
       "SELECT public.user_update_role($1, $2, $3)",
       [entrauserid, userrole, modifiedby]
     );
 
     const useruuid = result.rows[0]?.user_update_role || null;
-
+    // Emit real-time notification to the user about their role change (will remove this if it fails -jasper)
+    const io = req.app?.get("io");
+    if (io) {
+      io.to(entrauserid).emit("user:role_changed", {
+        entrauserid,
+        userrole,
+        updatedBy: modifiedby ?? null,
+        countdownSeconds: 10,
+      });
+    }
+    //
     return res.status(200).json({ useruuid });
   } catch (err) {
     console.error("update_UserRole error:", err.message);
@@ -474,6 +489,36 @@ const sync_Users = async (req, res) => {
 
         console.log(`[SYNC] Batch upserted ${validUsers.length} users`);
 
+          try {
+            const dynamicsToken = await getDynamicsToken();
+            const accountRes = await axios.get(
+                `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts?$filter=ss_azuretenantid eq '${entraTenantId}'&$select=accountid,name&$top=1`,
+                {
+                    headers: {
+                        Authorization:      `Bearer ${dynamicsToken}`,
+                        Accept:             "application/json",
+                        "OData-Version":    "4.0",
+                        "OData-MaxVersion": "4.0",
+                    }
+                }
+            );
+
+            const dynamicsAccount = accountRes.data.value?.[0] ?? null;
+
+            if (dynamicsAccount?.accountid) {
+                await client.query(
+                    `SELECT * FROM tenant_update_dynamicsaccountid($1, $2)`,
+                    [dynamicsAccount.accountid, entraTenantId]
+                );
+                console.log(`[SYNC] Linked Dynamics accountid ${dynamicsAccount.accountid} to tenant ${entraTenantId}`);
+            } else {
+                console.warn(`[SYNC] No Dynamics account found for tenant: ${entraTenantId}`);
+            }
+        } catch (dynamicsErr) {
+            console.warn(`[SYNC] Could not fetch Dynamics accountid:`, dynamicsErr.message);
+          
+        }
+
         const managerPairs = await fetchManagersBatch(graphUsers, headers);
 
         let managersResolved = 0;
@@ -524,163 +569,18 @@ const sync_Users = async (req, res) => {
     }
 };
 
-const sync_AllTenantUsers = async (req, res) => {
-  try {
-    const tenantsResult = await client.query("SELECT * FROM public.tenant_get()");
-    const tenants = tenantsResult.rows;
-
-    if (tenants.length === 0) {
-      return res.status(200).json({ message: "No tenants configured with credentials." });
-    }
-
-    const results = [];
-
-    for (const tenant of tenants) {
-      try {
-        const tokenRes = await axios.post(
-          `https://login.microsoftonline.com/${tenant.v_entratenantid}/oauth2/v2.0/token`,
-          new URLSearchParams({
-            grant_type:    "client_credentials",
-            client_id:     tenant.v_clientid,
-            client_secret: tenant.v_clientsecret,
-            scope:         "https://graph.microsoft.com/.default",
-          })
-        );
-        const token   = await getAccessToken(tenant.v_entratenantid); // yours, their tenantId
-        const headers = { Authorization: `Bearer ${token}` };
-        let graphUsers = [];
-        let nextLink = `${GRAPH_URL}/users?$select=${USER_FIELDS}&$top=999`;
-
-        while (nextLink) {
-          const response = await axios.get(nextLink, { headers, timeout: 10000 });
-          graphUsers = [...graphUsers, ...response.data.value];
-          nextLink = response.data["@odata.nextLink"] ?? null;
-        }
-
-        if (graphUsers.length === 0) {
-          results.push({ tenant: tenant.v_tenantname, message: "No users found.", synced: 0 });
-          continue;
-        }
-
-        const existingResult = await client.query(
-          "SELECT * FROM public.user_email_get()"
-        );
-        const existingEmails = new Set(existingResult.rows.map((r) => r.v_useremail));
-
-        const newUsers = graphUsers.filter((user) => {
-          const email = user.mail ?? user.userPrincipalName ?? null;
-          if (!email) return false;
-          return !existingEmails.has(email.toLowerCase());
-        });
-
-        if (newUsers.length === 0) {
-          results.push({
-            tenant: tenant.v_tenantname,
-            message: "All users already synced.",
-            total: graphUsers.length,
-            synced: 0,
-          });
-          continue;
-        }
-
-        let synced = 0;
-        let skipped = 0;
-
-        for (const user of newUsers) {
-          const email = user.mail ?? user.userPrincipalName ?? null;
-          if (!email) { skipped++; continue; }
-
-          try {
-            await client.query(
-              "SELECT public.user_sync($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-              [
-                user.id,
-                tenant.v_entratenantid,
-                user.displayName ?? null,
-                user.jobTitle ?? null,
-                user.businessPhones?.[0] ?? null,
-                email,
-                user.department ?? null,
-                user.mobilePhone ?? null,
-                user.createdDateTime ?? null,
-                tenant.v_tenantname,
-                tenant.v_tenantemail,
-              ]
-            );
-            synced++;
-          } catch (userErr) {
-            console.error(`Failed to sync user ${email}:`, userErr.message);
-            skipped++;
-          }
-        }
-
-        results.push({
-          tenant: tenant.v_tenantname,
-          total: graphUsers.length,
-          new: newUsers.length,
-          synced,
-          skipped,
-        });
-
-      } catch (tenantErr) {
-        console.error(`Failed to sync tenant ${tenant.v_tenantname}:`, tenantErr.message);
-        results.push({
-          tenant: tenant.v_tenantname,
-          error: tenantErr.message,
-        });
-      }
-    }
-
-    return res.status(200).json({
-      message: "Multi-tenant sync completed.",
-      total_tenants: tenants.length,
-      results,
-    });
-
-  } catch (err) {
-    console.error("sync_AllTenantUsers error:", err.message);
-
-    if (err.response) {
-      return res.status(err.response.status).json({
-        error: err.response.data?.error?.message || "Graph API Error",
-      });
-    }
-
-    if (err.request) {
-      return res.status(504).json({
-        error: "No response from Microsoft Graph (Timeout or Network Issue)",
-      });
-    }
-
-    return res.status(500).json({ error: err.message });
-  }
-};
 
 const create_user_onlogin = async (req, res) => {
   try {
-
     const entraUserId = req.user?.oid || req.user?.sub;
     const tenantId    = req.user?.tid;
-    const displayName = req.user?.name                ?? null;
-    const email       = req.user?.preferred_username  ?? req.user?.email ?? null;
-    const roles       = req.user?.roles               ?? [];
+    const displayName = req.user?.name               ?? null;
+    const email       = req.user?.preferred_username ?? req.user?.email ?? null;
+    const roles       = req.user?.roles              ?? [];
     const userRole    = roles.length > 0 ? roles[0] : "User";
 
     if (!entraUserId || !tenantId) {
       return res.status(400).json({ error: "Invalid token: missing user or tenant ID" });
-    }
-
-    const existingUser = await client.query(
-      `SELECT * FROM public.user_get_info($1)`,
-      [entraUserId]
-    );
-
-    const existingRow = existingUser.rows[0];
-    if (existingRow?.v_entrauserid) {
-      return res.status(200).json({
-        message: "User already exists",
-        user: existingRow,
-      });
     }
 
     const tenantCheck = await client.query(
@@ -696,22 +596,35 @@ const create_user_onlogin = async (req, res) => {
 
     const tenant = tenantCheck.rows[0];
 
+    const existingUser = await client.query(
+      `SELECT * FROM public.user_get_info($1)`,
+      [entraUserId]
+    );
+
+    const existingRow = existingUser.rows[0];
+    if (existingRow?.entrauserid) {
+      return res.status(200).json({
+        message: "User already exists",
+        user: existingRow,
+      });
+    }
+
     await client.query(
       `SELECT public.user_create_onlogin($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [
-        entraUserId,          // $1  user entra id
-        tenantId,             // $2  tenant entra id
-        displayName,          // $3  display name from token
-        null,                 // $4  jobTitle — not in token, skip for now
-        null,                 // $5  businessPhone — not in token, skip for now
-        email,                // $6  email from token
-        null,                 // $7  department — not in token, skip for now
-        null,                 // $8  mobilePhone — not in token, skip for now
-        new Date().toISOString(), // $9 createdDateTime
-        tenant.v_tenantname,  // $10 tenant name from DB
-        tenant.v_tenantemail, // $11 tenant email from DB
-        userRole,             // $12 role from token claims
-        "true",               // $13 accountEnabled — if they can log in, they're enabled
+        entraUserId,        
+        tenantId,           
+        displayName,        
+        null,               
+        null,              
+        email,              
+        null,               
+        null,               
+        new Date().toISOString(), 
+        tenant.v_tenantname,     
+        tenant.v_tenantemail,   
+        userRole,          
+        "true",            
       ]
     );
 
@@ -746,6 +659,5 @@ module.exports = {
   get_User_Info,
   update_UserRole,
   sync_Users,
-  sync_AllTenantUsers,
   create_user_onlogin
 };
