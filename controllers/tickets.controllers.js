@@ -585,6 +585,7 @@ const syncToDynamics = async ({
     const dynamicsIncidentId   = dynamicsRes.data?.incidentid  ?? null;
     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
     const dynamicsStatus       = dynamicsRes.data?.["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const ticketStatus       = dynamicsRes.data?.["statecode@OData.Community.Display.V1.FormattedValue"] ?? null;
     const sourceLabel          = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"]              ?? null;
     const category             = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]      ?? null;
     const duedate              = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"]             ?? null;
@@ -595,8 +596,8 @@ const syncToDynamics = async ({
 
     if (dynamicsIncidentId) {
         await client.query(
-            "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
+            "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, ticketStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
         );
 
         const updated = await client.query(
@@ -889,10 +890,10 @@ const db_loadUserMap = async () => {
 };
 
 const db_syncTicket = async (ticket, tenantid, userid, technicianname, entrauserid) => {
-    // const statusCode  = ticket.statuscode ?? null;
+
     const statusLabel =ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]
-                    //  ??  DYNAMICS_STATUSCODE_MAP[statusCode]
-                     ?? null;
+
+    const ticketstatus = ticket["statecode@OData.Community.Display.V1.FormattedValue"] ?? null;
                      
     const createdby = ticket.ss_Contact?.emailaddress1 ?? null;
 
@@ -901,7 +902,7 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname, entrauser
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
             $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-            $31,$32,$33,$34,$35,$36,$37,$38,$39,$40
+            $31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41
         )`,
         [
             ticket.incidentid,
@@ -937,6 +938,7 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname, entrauser
             ticket["ss_tickettype@OData.Community.Display.V1.FormattedValue"]                               ?? null,
             ticket["prioritycode@OData.Community.Display.V1.FormattedValue"]                                ?? null,
             statusLabel,
+            ticketstatus,
             ticket.ss_quickfixflag                                                                          ?? null,
             ticket.ss_reason                                                                                ?? null,
             ticket.ss_resolveddate                                                                          ?? null,
@@ -1360,7 +1362,7 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
             `SELECT public.ticket_webhook_update(
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32
+                $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
             )`,
             [
                 ticket.incidentid,                                                                                   // $1
@@ -1391,10 +1393,11 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
                 ticket["ss_tickettype@OData.Community.Display.V1.FormattedValue"]                           ?? null, // $26
                 ticket["prioritycode@OData.Community.Display.V1.FormattedValue"]                            ?? null, // $27
                 ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]                 ?? null,// $28
-                ticket.ss_quickfixflag?.toString()                                                         ?? null, // $29
-                ticket.ss_reason                                                                            ?? null, // $30
-                ticket.ss_completedonautotask                                                               ?? null, // $31
-                ticket.ss_resolution                                                                        ?? null, // $32
+                ticket["statecode@OData.Community.Display.V1.FormattedValue"]                           ?? null,// $29
+                ticket.ss_quickfixflag?.toString()                                                          ?? null, // $30
+                ticket.ss_reason                                                                            ?? null, // $31
+                ticket.ss_completedonautotask                                                               ?? null, // $32
+                ticket.ss_resolution                                                                        ?? null, // $33
             ]
         );
 
