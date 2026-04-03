@@ -7,8 +7,8 @@ const validateToken = require("../middlewares/validateToken");
 
 router.get("/", validateToken, get_Ticket);
 router.get("/status",   validateToken, get_Ticket_Status);
-router.get("/home", get_Ticket_Home);
-router.get("/manager/home", get_Ticket_Manager_Home);
+router.get("/home", validateToken, get_Ticket_Home);
+router.get("/manager/home", validateToken, get_Ticket_Manager_Home);
 router.get("/manager-team", validateToken, get_ManagerTeamTickets);
 router.get("/manager", validateToken, get_ManagerTickets);
 router.post("/", validateToken, create_Ticket);
