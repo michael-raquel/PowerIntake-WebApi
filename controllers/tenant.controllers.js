@@ -1,6 +1,5 @@
 const client = require("../config/db");
 
-
 const create_Tenant = async (req, res) => {
   try {
     const {
@@ -49,6 +48,63 @@ const create_Tenant = async (req, res) => {
   }
 };
 
+const update_Tenant = async (req, res) => {
+  try {
+    const {
+      tenantuuid,
+      entratenantid,
+      tenantname,
+      tenantemail,
+      dynamicsaccountid,
+      admingroupid,
+      usergroupid,
+      isactive,
+      isconsented,
+    } = req.body;
+
+    const parseBool = (value, key) => {
+      if (value === undefined || value === null || value === "") return null;
+      if (value === true || value === "true") return true;
+      if (value === false || value === "false") return false;
+      throw new Error(`VALIDATION_ERROR: ${key} must be true or false`);
+    };
+
+    if (!tenantuuid || !entratenantid || !tenantname) {
+      return res.status(400).json({
+        error: "tenantuuid, entratenantid, and tenantname are required",
+      });
+    }
+
+    await client.query(
+      "SELECT public.tenant_update($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+      [
+        tenantuuid,
+        entratenantid,
+        tenantname,
+        tenantemail || null,
+        dynamicsaccountid || null,
+        admingroupid || null,
+        usergroupid || null,
+        parseBool(isactive, "isactive"),
+        parseBool(isconsented, "isconsented"),
+      ],
+    );
+
+    return res.status(200).json({
+      message: "Tenant updated successfully",
+      tenantuuid,
+    });
+  } catch (err) {
+    console.error("update_Tenant error:", err.message);
+
+    if (err.message?.includes("VALIDATION_ERROR")) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 const get_Tenants = async (req, res) => {
   try {
     const {
@@ -58,8 +114,6 @@ const get_Tenants = async (req, res) => {
       isconsented,
       isactive,
     } = req.query;
-
-
 
     const parsedTenantId =
       tenantid === undefined || tenantid === null || tenantid === ""
@@ -118,7 +172,7 @@ const check_ConsentStatus = async (req, res) => {
     const result = await client.query(
       `SELECT * FROM public.tenant_get_map_with_entratenantid()
        WHERE entratenantid = $1`,
-      [tenantId]
+      [tenantId],
     );
 
     const tenantExists = result.rows.length > 0;
@@ -129,7 +183,7 @@ const check_ConsentStatus = async (req, res) => {
     const isactive = tenantExists ? row.isactive === true : false;
 
     console.log(
-      `[CONSENT STATUS] tenantId=${tenantId} tenantExists=${tenantExists} consented=${consented} isactive=${isactive}`
+      `[CONSENT STATUS] tenantId=${tenantId} tenantExists=${tenantExists} consented=${consented} isactive=${isactive}`,
     );
 
     return res.status(200).json({
@@ -138,11 +192,15 @@ const check_ConsentStatus = async (req, res) => {
       isactive,
       tenantId,
     });
-
   } catch (err) {
     console.error("[CONSENT STATUS ERROR]", err.message);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 };
 
-module.exports = { create_Tenant, get_Tenants, check_ConsentStatus };
+module.exports = {
+  create_Tenant,
+  update_Tenant,
+  get_Tenants,
+  check_ConsentStatus,
+};

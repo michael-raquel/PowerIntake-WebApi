@@ -97,6 +97,75 @@
 /**
  * @swagger
  * /tenants:
+ *   put:
+ *     summary: Update a tenant
+ *     tags: [Tenants]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           example:
+ *             tenantuuid: "550e8400-e29b-41d4-a716-446655440000"
+ *             entratenantid: "1159156a-3971-429d-bb02-bd37b1223d24"
+ *             tenantname: "Contoso Philippines"
+ *             tenantemail: "admin@contoso.ph"
+ *             dynamicsaccountid: "5f00ecfd-7fd2-f011-8c4d-7c1e520d4978"
+ *             admingroupid: "group-id-value"
+ *             usergroupid: "user-group-id-value"
+ *             isactive: true
+ *             isconsented: true
+ *     responses:
+ *       200:
+ *         description: Successfully updated tenant
+ *         content:
+ *           application/json:
+ *             example:
+ *               message: "Tenant updated successfully"
+ *               tenantuuid: "550e8400-e29b-41d4-a716-446655440000"
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             examples:
+ *               missingFields:
+ *                 summary: Required fields are missing
+ *                 value:
+ *                   error: "tenantuuid, entratenantid, and tenantname are required"
+ *               notFound:
+ *                 summary: Tenant UUID does not exist
+ *                 value:
+ *                   error: "VALIDATION_ERROR: Tenant with UUID 550e8400-e29b-41d4-a716-446655440000 does not exist."
+ *               duplicateTenant:
+ *                 summary: Entra tenant ID already exists
+ *                 value:
+ *                   error: "VALIDATION_ERROR: Tenant with EntraTenantID 1159156a-3971-429d-bb02-bd37b1223d24 already exists."
+ *               duplicateDynamicsAccount:
+ *                 summary: Dynamics account already exists
+ *                 value:
+ *                   error: "VALIDATION_ERROR: DynamicsAccountID 5f00ecfd-7fd2-f011-8c4d-7c1e520d4978 already exists."
+ *               invalidBoolean:
+ *                 summary: Invalid boolean value
+ *                 value:
+ *                   error: "VALIDATION_ERROR: isactive must be true or false"
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Unauthorized: No token provided"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
+
+/**
+ * @swagger
+ * /tenants:
  *   post:
  *     summary: Create a tenant
  *     tags: [Tenants]
