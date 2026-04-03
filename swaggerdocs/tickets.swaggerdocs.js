@@ -4,6 +4,7 @@
  *   name: Tickets
  *   description: Ticket management endpoints
  */
+
  
 /**
  * @swagger
@@ -96,6 +97,112 @@
  *                     v_status: "Submitted"
  *                     v_createdat: "2026-01-01T09:00:00Z"
  *                     v_createdby: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
+
+/**
+ * @swagger
+ * /tickets/home:
+ *   get:
+ *     summary: Get ticket home summary (dashboard view)
+ *     description: Returns ticket rows and aggregated counts for the home/dashboard view. Can be filtered by Entra Tenant ID or Entra User ID.
+ *     tags: [Tickets]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: entratenantid
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Entra Tenant ID to filter results
+ *       - in: query
+ *         name: entrauserid
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Entra User ID to filter results
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved home ticket data
+ *         content:
+ *           application/json:
+ *             example:
+ *               - v_clientname: "Sparta Services LLC"
+ *                 v_ticketnumber: "TKT-2026-000001"
+ *                 v_status: "New"
+ *                 v_statusgroup: "New"
+ *                 v_username: "John Doe"
+ *                 v_technicianname: "Alex Rivera"
+ *                 v_ticketcategory: "Network"
+ *                 v_source: "Email"
+ *                 v_target: null
+ *                 v_createdat: "2026-03-17T09:00:00Z"
+ *                 v_inprogress: 5
+ *                 v_new: 2
+ *                 v_completed: 10
+ *                 v_completionrate: 80.00
+ *                 total_count: 17
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
+
+/**
+ * @swagger
+ * /tickets/manager/home:
+ *   get:
+ *     summary: Get manager ticket home summary (dashboard view)
+ *     description: Returns ticket rows and aggregated counts for a manager's direct reports. Filter by manager Entra user ID and optional status.
+ *     tags: [Tickets]
+ *     parameters:
+ *       - in: query
+ *         name: managerentrauserid
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Manager Entra User ID
+ *       - in: query
+ *         name: status
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Filter by ticket status (e.g., New, Work Completed)
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved manager home ticket data
+ *         content:
+ *           application/json:
+ *             example:
+ *               - v_clientname: "Sparta Services LLC"
+ *                 v_ticketnumber: "TKT-2026-000001"
+ *                 v_status: "New"
+ *                 v_statusgroup: "New"
+ *                 v_username: "John Doe"
+ *                 v_technicianname: "Alex Rivera"
+ *                 v_ticketcategory: "Network"
+ *                 v_source: "Email"
+ *                 v_target: null
+ *                 v_createdat: "2026-03-17T09:00:00Z"
+ *                 v_inprogress: 5
+ *                 v_new: 2
+ *                 v_completed: 10
+ *                 v_completionrate: 80.00
+ *                 total_count: 17
+ *       400:
+ *         description: Validation Error (e.g., manager not found)
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Manager not found with entrauserid: aabbccdd-1234-5678-abcd-ef1234567890"
  *       500:
  *         description: Internal Server Error
  *         content:

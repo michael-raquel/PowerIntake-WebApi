@@ -25,6 +25,69 @@ const get_Ticket = async (req, res) => {
     }
 };
 
+const get_Ticket_Home = async (req, res) => {
+    try {
+        const { entratenantid, entrauserid } = req.query;
+
+        const result = await client.query(
+            "SELECT * FROM public.ticket_get_home($1, $2)",
+            [entratenantid || null, entrauserid || null]
+        );
+
+        const rows = result.rows || [];
+
+        const totals = rows.length > 0 ? {
+            v_inprogress: rows[0].v_inprogress,
+            v_new: rows[0].v_new,
+            v_completed: rows[0].v_completed,
+            v_completionrate: rows[0].v_completionrate,
+            total_count: rows[0].total_count,
+        } : { v_inprogress: 0, v_new: 0, v_completed: 0, v_completionrate: 0, total_count: 0 };
+
+        const cleanRows = rows.map(r => {
+            const { v_inprogress, v_new, v_completed, v_completionrate, total_count, ...rest } = r;
+            return rest;
+        });
+
+        res.status(200).json({ rows: cleanRows, totals });
+    } catch (err) {
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
+const get_Ticket_Manager_Home = async (req, res) => {
+    try {
+        const { managerentrauserid, status } = req.query;
+
+        const result = await client.query(
+            "SELECT * FROM public.ticket_get_manager_home($1, $2)",
+            [managerentrauserid || null, status || null]
+        );
+
+        const rows = result.rows || [];
+
+        const totals = rows.length > 0 ? {
+            v_inprogress: rows[0].v_inprogress,
+            v_new: rows[0].v_new,
+            v_completed: rows[0].v_completed,
+            v_completionrate: rows[0].v_completionrate,
+            total_count: rows[0].total_count,
+        } : { v_inprogress: 0, v_new: 0, v_completed: 0, v_completionrate: 0, total_count: 0 };
+
+        const cleanRows = rows.map(r => {
+            const { v_inprogress, v_new, v_completed, v_completionrate, total_count, ...rest } = r;
+            return rest;
+        });
+
+        res.status(200).json({ rows: cleanRows, totals });
+    } catch (err) {
+        if (err.message) {
+            return res.status(400).json({ error: err.message });
+        }
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
 const get_Ticket_Status = async (req, res) => {
     try {
 
@@ -1859,6 +1922,8 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
 module.exports = {
     get_Ticket,
+    get_Ticket_Home,
+    get_Ticket_Manager_Home,
     update_Ticket,
     get_Ticket_Status,
     get_ManagerTeamTickets,
