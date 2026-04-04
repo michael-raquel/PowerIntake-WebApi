@@ -666,6 +666,75 @@ const create_user_onlogin = async (req, res) => {
   }
 };
 
+const create_Group = async (req, res) => {
+  try {
+    const {
+      tenantId,          // optional — falls back to JWT if not provided
+      displayName,
+      mailNickname,
+      mailEnabled = false,
+      securityEnabled = true,
+      groupTypes = [],
+      description,
+      ownerOids = [],
+      memberOids = [],
+    } = req.body || {};
+
+    const resolvedTenantId = tenantId || req.tenantId; // ← body first, JWT fallback
+
+    if (!resolvedTenantId) {
+      return res.status(400).json({ error: "tenantId could not be resolved" });
+    }
+
+    if (!displayName || !mailNickname) {
+      return res.status(400).json({ error: "displayName and mailNickname are required" });
+    }
+
+    const token = await getAccessToken(resolvedTenantId);
+
+    const payload = {
+      displayName,
+      mailNickname,
+      mailEnabled,
+      securityEnabled,
+      groupTypes,
+      ...(description && { description }),
+      ...(ownerOids.length && {
+        "owners@odata.bind": ownerOids.map((oid) => `${GRAPH_URL}/users/${oid}`),
+      }),
+      ...(memberOids.length && {
+        "members@odata.bind": memberOids.map((oid) => `${GRAPH_URL}/users/${oid}`),
+      }),
+    };
+
+    const response = await axios.post(`${GRAPH_URL}/groups`, payload, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 10000,
+    });
+
+    return res.status(201).json(response.data);
+  } catch (err) {
+    console.error("create_Group error:", err.message);
+
+    if (err.response) {
+      return res.status(err.response.status).json({
+        error: err.response.data?.error?.message || "Graph API Error",
+      });
+    }
+
+    if (err.request) {
+      return res.status(504).json({
+        error: "No response from Microsoft Graph (Timeout or Network Issue)",
+      });
+    }
+
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 module.exports = {
   get_AllUsers,
   get_UserById,
@@ -680,5 +749,6 @@ module.exports = {
   get_User_Role,
   update_UserRole,
   sync_Users,
-  create_user_onlogin
+  create_user_onlogin,
+  create_Group,
 };
