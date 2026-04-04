@@ -1,4 +1,8 @@
 const client = require("../config/db");
+const axios = require("axios");
+const { getAccessToken } = require("../config/authService");
+
+const GRAPH_URL = "https://graph.microsoft.com/v1.0";
 
 const create_Tenant = async (req, res) => {
   try {
@@ -198,9 +202,110 @@ const check_ConsentStatus = async (req, res) => {
   }
 };
 
+// ─── Get Tenant Information ───────────────────────────────────────────────────
+// Extracts tid from the Bearer access token (req.user.tid injected by validateToken middleware),
+// then calls Microsoft Graph /organization to retrieve full tenant details.
+const get_TenantInfo = async (req, res) => {
+  try {
+    // tid is populated from the decoded JWT by your validateToken middleware
+    const tenantId = req.user?.tid || req.tenantId;
+
+    if (!tenantId) {
+      return res
+        .status(400)
+        .json({ error: "Unable to resolve tenantId from access token" });
+    }
+
+    const token = await getAccessToken(tenantId);
+    const headers = { Authorization: `Bearer ${token}` };
+
+    // Fetch organization (tenant) info from Graph
+    const orgRes = await axios.get(`${GRAPH_URL}/organization`, {
+      headers,
+      params: {
+        $select: [
+          "id",
+          "displayName",
+          "verifiedDomains",
+          "assignedPlans",
+          "createdDateTime",
+          "country",
+          "countryLetterCode",
+          "city",
+          "state",
+          "street",
+          "postalCode",
+          "preferredLanguage",
+          "tenantType",
+          "onPremisesSyncEnabled",
+          "onPremisesLastSyncDateTime",
+          "technicalNotificationMails",
+          "defaultUsageLocation",
+          "directorySizeQuota",
+        ].join(","),
+      },
+      timeout: 10000,
+    });
+
+    const org = orgRes.data.value?.[0];
+
+    if (!org) {
+      return res
+        .status(404)
+        .json({ error: "Tenant organization not found in Microsoft Graph" });
+    }
+
+    // Resolve default domain from verifiedDomains
+    const defaultDomain =
+      org.verifiedDomains?.find((d) => d.isDefault)?.name ?? null;
+    const initialDomain =
+      org.verifiedDomains?.find((d) => d.isInitial)?.name ?? null;
+
+    return res.status(200).json({
+      tenantId: org.id,
+      displayName: org.displayName,
+      defaultDomain,
+      initialDomain,
+      verifiedDomains: org.verifiedDomains ?? [],
+      createdDateTime: org.createdDateTime ?? null,
+      country: org.country ?? null,
+      countryLetterCode: org.countryLetterCode ?? null,
+      city: org.city ?? null,
+      state: org.state ?? null,
+      street: org.street ?? null,
+      postalCode: org.postalCode ?? null,
+      preferredLanguage: org.preferredLanguage ?? null,
+      tenantType: org.tenantType ?? null,
+      onPremisesSyncEnabled: org.onPremisesSyncEnabled ?? null,
+      onPremisesLastSyncDateTime: org.onPremisesLastSyncDateTime ?? null,
+      technicalNotificationMails: org.technicalNotificationMails ?? [],
+      defaultUsageLocation: org.defaultUsageLocation ?? null,
+      directorySizeQuota: org.directorySizeQuota ?? null,
+      assignedPlans: org.assignedPlans ?? [],
+    });
+  } catch (err) {
+    console.error("get_TenantInfo error:", err.message);
+
+    if (err.response) {
+      return res.status(err.response.status).json({
+        error: err.response.data?.error?.message || "Graph API Error",
+      });
+    }
+
+    if (err.request) {
+      return res.status(504).json({
+        error: "No response from Microsoft Graph (Timeout or Network Issue)",
+      });
+    }
+
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 module.exports = {
   create_Tenant,
   update_Tenant,
   get_Tenants,
   check_ConsentStatus,
+  get_TenantInfo,
 };
