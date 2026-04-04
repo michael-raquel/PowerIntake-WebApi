@@ -129,7 +129,6 @@ const assignAdminToGroups = async (
   usersGroupId,
 ) => {
   const addToGroup = async (groupId) => {
-    // Attempt member check first — falls through on unsupported $filter
     try {
       const checkRes = await axios.get(
         `${GRAPH_URL}/groups/${groupId}/members?$filter=id eq '${adminOid}'&$select=id`,
@@ -156,7 +155,6 @@ const assignAdminToGroups = async (
       );
       console.log(`[POST-CONSENT] Added admin ${adminOid} to group ${groupId}`);
     } catch (err) {
-      // 400 "One or more added object references already exist" — safe to ignore
       if (
         err.response?.status === 400 &&
         err.response?.data?.error?.message
@@ -183,7 +181,6 @@ const assignAdminToGroups = async (
 
 // ─── Flow 3: Batch Assign All Tenant Users to PowerIntake.Users ───────────────
 const batchAssignUsersToGroup = async (headers, usersGroupId) => {
-  // Page through all tenant users
   let allUsers = [];
   let nextLink = `${GRAPH_URL}/users?$select=id&$top=999`;
   while (nextLink) {
@@ -197,7 +194,6 @@ const batchAssignUsersToGroup = async (headers, usersGroupId) => {
     return;
   }
 
-  // Page through existing group members
   const existingMemberIds = new Set();
   let membersLink = `${GRAPH_URL}/groups/${usersGroupId}/members?$select=id&$top=999`;
   while (membersLink) {
@@ -220,7 +216,6 @@ const batchAssignUsersToGroup = async (headers, usersGroupId) => {
       `(${existingMemberIds.size} already members)`,
   );
 
-  // Graph bulk-add limit: 20 per PATCH request
   const chunkSize = 20;
   for (let i = 0; i < usersToAdd.length; i += chunkSize) {
     const chunk = usersToAdd.slice(i, i + chunkSize);
@@ -322,7 +317,7 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
     // Flow 4 — Assign groups to their respective app roles
     await assignGroupsToAppRoles(headers, adminGroupId, usersGroupId);
 
-    // Flow 5 — Persist group IDs into DB using new focused function
+    // Flow 5 — Persist group IDs into DB using focused function
     await persistGroupIdsToDb(tenantUuid, adminGroupId, usersGroupId);
 
     console.log(
@@ -336,16 +331,10 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
 // ─── Consent Callback ─────────────────────────────────────────────────────────
 const consent_Callback = async (req, res) => {
   const { tenant, admin_consent, error } = req.query;
-
-  // Global Admin OID from the validated JWT (set by validateToken middleware)
   const adminOid = req.user?.oid || req.user?.sub;
 
   if (error || admin_consent !== "True") {
-    console.warn("[CONSENT] Failed or cancelled:", {
-      tenant,
-      error,
-      admin_consent,
-    });
+    console.warn("[CONSENT] Failed or cancelled:", { tenant, error, admin_consent });
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
 
@@ -355,9 +344,7 @@ const consent_Callback = async (req, res) => {
   }
 
   if (!adminOid) {
-    console.error(
-      "[CONSENT] Missing admin OID from token — is validateToken applied to this route?",
-    );
+    console.error("[CONSENT] Missing admin OID from token — is validateToken applied to this route?");
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
 
@@ -365,23 +352,21 @@ const consent_Callback = async (req, res) => {
     const token = await getAccessToken(tenant);
     const headers = { Authorization: `Bearer ${token}` };
 
+    // ── Fetch org info ──────────────────────────────────────────────────────
     const orgRes = await axios.get(`${GRAPH_URL}/organization`, { headers });
     const org = orgRes.data.value?.[0];
     const tenantName = org?.displayName ?? "Unknown";
     const tenantDomain =
       org?.verifiedDomains?.find((d) => d.isDefault)?.name ?? null;
 
-    // Grant Graph permissions on client tenant
+    // ── Grant Graph permissions (non-blocking) ──────────────────────────────
     try {
       await grantGraphPermissions(token);
     } catch (grantErr) {
-      console.warn(
-        "[CONSENT] Could not auto-grant Graph permissions:",
-        grantErr.message,
-      );
+      console.warn("[CONSENT] Could not auto-grant Graph permissions:", grantErr.message);
     }
 
-    // Update isconsented in DB
+    // ── Update isconsented in DB ────────────────────────────────────────────
     const consentResult = await client.query(
       `SELECT * FROM public.tenant_update_isconsented($1, $2)`,
       [tenant, true],
@@ -395,38 +380,53 @@ const consent_Callback = async (req, res) => {
       return res.json({ redirectUrl: "/consent-callback?consent=failed" });
     }
 
+    // ── Resolve tenantuuid (isolated — never blocks the redirect) ───────────
+    let tenantUuid = null;
+    try {
+      const tenantRow = await client.query(
+        `SELECT tenantuuid
+         FROM public.tenant_get_map_with_entratenantid()
+         WHERE entratenantid = $1`,
+        [tenant],
+      );
+      tenantUuid = tenantRow.rows[0]?.tenantuuid ?? null;
+
+      if (!tenantUuid) {
+        console.warn(
+          `[CONSENT] ⚠️ Could not resolve tenantuuid for entratenantid=${tenant}`,
+        );
+      }
+    } catch (uuidErr) {
+      // Never let this block the redirect
+      console.error("[CONSENT] ❌ Failed to fetch tenantuuid:", uuidErr.message, uuidErr.stack);
+    }
+
     console.log("[CONSENT] ✅ Admin approval received:");
     console.log(`  Tenant ID   : ${tenant}`);
     console.log(`  Tenant Name : ${tenantName}`);
     console.log(`  Domain      : ${tenantDomain}`);
     console.log(`  Admin OID   : ${adminOid}`);
+    console.log(`  Tenant UUID : ${tenantUuid ?? "not resolved"}`);
     console.log(`  DB updated  : ${updateRow.updated}`);
     console.log(`  Timestamp   : ${new Date().toISOString()}`);
 
-    // Fetch tenantuuid for use in tenant_update_groups
-    // Done before responding so we have it ready for the background flow
-    const tenantRow = await client.query(
-      `SELECT tenantuuid FROM public.tenant_get_map_with_entratenantid()
-       WHERE entratenantid = $1`,
-      [tenant],
-    );
-    const tenantUuid = tenantRow.rows[0]?.tenantuuid ?? null;
-
-    if (!tenantUuid) {
-      console.error(
-        `[CONSENT] ❌ Could not resolve tenantuuid for entratenantid=${tenant}`,
-      );
-      // Still respond with success since DB consent update passed — groups will just not persist
-    }
-
-    // Respond immediately — don't block the redirect on provisioning
+    // ── Respond immediately — never block on provisioning ───────────────────
     res.json({ redirectUrl: "/consent-callback?consent=success" });
 
-    // Fire-and-forget post-consent provisioning
-    runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
+    // ── Fire-and-forget post-consent provisioning ───────────────────────────
+    if (tenantUuid) {
+      runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
+    } else {
+      console.warn(
+        "[CONSENT] ⚠️ Skipping post-consent flow — tenantUuid could not be resolved",
+      );
+    }
   } catch (err) {
-    console.error("[CONSENT] Callback error:", err.message);
-    return res.json({ redirectUrl: "/consent-callback?consent=failed" });
+    console.error("[CONSENT] Callback error:", err.message, err.stack);
+    // Guard against double-send if res was already flushed
+    if (!res.headersSent) {
+      return res.json({ redirectUrl: "/consent-callback?consent=failed" });
+    }
   }
 };
 
