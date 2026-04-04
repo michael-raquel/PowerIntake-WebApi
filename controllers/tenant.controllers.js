@@ -179,28 +179,77 @@ const check_ConsentStatus = async (req, res) => {
       [tenantId],
     );
 
-    const tenantExists = result.rows.length > 0;
-    const row = result.rows[0] ?? null;
+    let row = result.rows[0] ?? null;
 
-    // ✅ Use isconsented column instead
-    const consented = tenantExists ? row.isconsented === true : false;
-    const isactive = tenantExists ? row.isactive === true : false;
+    // Auto-create tenant if not found
+    if (!row) {
+      console.log(
+        "[CONSENT STATUS] Tenant not found, fetching from Graph and creating...",
+      );
+
+      try {
+        const token = await getAccessToken(tenantId);
+        const orgRes = await axios.get(`${GRAPH_URL}/organization`, {
+          headers: { Authorization: `Bearer ${token}` },
+          params: {
+            $select: "id,displayName,technicalNotificationMails",
+          },
+          timeout: 10000,
+        });
+
+        const org = orgRes.data.value?.[0];
+
+        if (!org) {
+          return res
+            .status(404)
+            .json({
+              error: "Tenant organization not found in Microsoft Graph",
+            });
+        }
+
+        const tenantName = org.displayName ?? null;
+        const tenantEmail = org.technicalNotificationMails?.[0] ?? null;
+        const createdBy = req.user?.oid ?? null;
+
+        await client.query(
+          "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7) AS tenantuuid",
+          [tenantId, tenantName, tenantEmail, createdBy, null, null, null],
+        );
+
+        console.log(
+          `[CONSENT STATUS] Tenant auto-created: ${tenantId} (${tenantName})`,
+        );
+
+        // Re-fetch the newly created row
+        const newResult = await client.query(
+          `SELECT * FROM public.tenant_get_map_with_entratenantid()
+           WHERE entratenantid = $1`,
+          [tenantId],
+        );
+        row = newResult.rows[0] ?? null;
+      } catch (graphErr) {
+        console.error("[CONSENT STATUS] Auto-create failed:", graphErr.message);
+        return res
+          .status(500)
+          .json({ error: "Failed to auto-provision tenant" });
+      }
+    }
+
+    const consented = row?.isconsented === true;
+    const isactive = row?.isactive === true;
+    const isapproved = row?.isapproved === true;
 
     console.log(
-      `[CONSENT STATUS] tenantId=${tenantId} tenantExists=${tenantExists} consented=${consented} isactive=${isactive}`,
+      `[CONSENT STATUS] tenantId=${tenantId} consented=${consented} isactive=${isactive} isapproved=${isapproved}`,
     );
 
-    return res.status(200).json({
-      tenantExists,
-      consented,
-      isactive,
-      tenantId,
-    });
+    return res.status(200).json({ consented, isactive, isapproved, tenantId });
   } catch (err) {
     console.error("[CONSENT STATUS ERROR]", err.message);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 };
+
 
 // ─── Get Tenant Information ───────────────────────────────────────────────────
 // Extracts tid from the Bearer access token (req.user.tid injected by validateToken middleware),
