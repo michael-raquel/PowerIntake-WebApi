@@ -1841,7 +1841,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
 
 const reactivate_DynamicsTicket = async (req, res) => {
     try {
-        const { ticketuuid } = req.body;
+        const { ticketuuid, createdby } = req.body;
 
         if (!ticketuuid) {
             return res.status(400).json({ error: "ticketuuid is required" });
@@ -1872,6 +1872,11 @@ const reactivate_DynamicsTicket = async (req, res) => {
                     "OData-MaxVersion": "4.0",
                 }
             }
+        );
+
+        await client.query(
+            `SELECT note_create_reactivate($1, $2)`,
+            [ticketuuid, createdby]
         );
 
         console.log(`[DYNAMICS] Ticket reactivated: ${dynamicsIncidentId}`);
