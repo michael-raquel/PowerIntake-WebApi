@@ -72,6 +72,28 @@ const grantGraphPermissions = async (token) => {
   );
 };
 
+// ─── Resolve the enterprise app's Service Principal ID in the consenting tenant
+// This is CRITICAL for multi-tenant: appRoleAssignedTo must target THIS SP id,
+// not the home tenant's. When a tenant consents, Azure creates an enterprise app
+// (service principal) in their tenant with the same appId but a different object id.
+const resolveServicePrincipalInTenant = async (headers) => {
+  const spRes = await axios.get(
+    `${GRAPH_URL}/servicePrincipals?$filter=appId eq '${process.env.AZURE_CLIENT_ID}'&$select=id,appId,displayName`,
+    { headers, timeout: 10000 },
+  );
+  const sp = spRes.data.value?.[0];
+  if (!sp) {
+    throw new Error(
+      `[POST-CONSENT] Enterprise app service principal not found in consenting tenant for appId=${process.env.AZURE_CLIENT_ID}. ` +
+        `Ensure the tenant has completed admin consent.`,
+    );
+  }
+  console.log(
+    `[POST-CONSENT] Resolved enterprise SP in tenant — id=${sp.id}, displayName=${sp.displayName}`,
+  );
+  return sp;
+};
+
 // ─── Flow 1: Ensure Groups Exist ─────────────────────────────────────────────
 const ensureGroups = async (headers) => {
   const findGroup = async (displayName) => {
@@ -241,28 +263,29 @@ const batchAssignUsersToGroup = async (headers, usersGroupId) => {
   }
 };
 
-// ─── Flow 4: Assign Groups to App Roles ──────────────────────────────────────
-const assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId) => {
-  const spRes = await axios.get(
-    `${GRAPH_URL}/servicePrincipals?$filter=appId eq '${process.env.AZURE_CLIENT_ID}'&$select=id,appId,displayName,appRoles`,
-    { headers, timeout: 10000 },
-  );
-  const sp = spRes.data.value?.[0];
-  if (!sp)
-    throw new Error("Service principal not found for app role assignment");
-
+// ─── Flow 4: Assign Groups to App Roles on the TENANT'S enterprise app SP ─────
+// KEY FIX: We pass in the already-resolved `enterpriseSpId` (the SP object ID
+// in the CONSENTING tenant). Previously this used getAccessToken() which returned
+// the home-tenant SP id — wrong target for cross-tenant role assignments.
+const assignGroupsToAppRoles = async (
+  headers,
+  adminGroupId,
+  usersGroupId,
+  enterpriseSpId, // <-- SP object ID in the CONSENTING tenant
+) => {
   const assignGroupRole = async (groupId, appRoleId, label) => {
+    // Check if the group already has this role assigned on the enterprise SP
     const existingRes = await axios.get(
       `${GRAPH_URL}/groups/${groupId}/appRoleAssignments`,
       { headers, timeout: 10000 },
     );
     const alreadyAssigned = existingRes.data.value?.some(
-      (a) => a.resourceId === sp.id && a.appRoleId === appRoleId,
+      (a) => a.resourceId === enterpriseSpId && a.appRoleId === appRoleId,
     );
 
     if (alreadyAssigned) {
       console.log(
-        `[POST-CONSENT] ${label} already assigned to appRole ${appRoleId}`,
+        `[POST-CONSENT] ${label} already assigned to appRole ${appRoleId} on SP ${enterpriseSpId}`,
       );
       return;
     }
@@ -271,12 +294,14 @@ const assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId) => {
       `${GRAPH_URL}/groups/${groupId}/appRoleAssignments`,
       {
         principalId: groupId,
-        resourceId: sp.id,
+        resourceId: enterpriseSpId, // <-- must be the consenting tenant's SP id
         appRoleId,
       },
       { headers, timeout: 10000 },
     );
-    console.log(`[POST-CONSENT] Assigned ${label} → appRole ${appRoleId}`);
+    console.log(
+      `[POST-CONSENT] Assigned ${label} → appRole ${appRoleId} on SP ${enterpriseSpId}`,
+    );
   };
 
   await Promise.allSettled([
@@ -305,7 +330,13 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
   };
 
   try {
-    // Flow 1 — Ensure groups exist (create or retrieve IDs)
+    // Resolve the enterprise app's SP in the CONSENTING tenant first.
+    // This object ID is what must be used as `resourceId` in all appRoleAssignments.
+    // In multi-tenant apps, each tenant gets its own SP object ID even though
+    // the appId (clientId) is the same everywhere.
+    const enterpriseSp = await resolveServicePrincipalInTenant(headers);
+
+    // Flow 1 — Ensure groups exist in the consenting tenant
     const { adminGroupId, usersGroupId } = await ensureGroups(headers);
 
     // Flow 2 — Assign Global Admin to both groups
@@ -314,10 +345,15 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
     // Flow 3 — Batch assign all tenant users to PowerIntake.Users
     await batchAssignUsersToGroup(headers, usersGroupId);
 
-    // Flow 4 — Assign groups to their respective app roles
-    await assignGroupsToAppRoles(headers, adminGroupId, usersGroupId);
+    // Flow 4 — Assign groups to their app roles using the TENANT-LOCAL SP id
+    await assignGroupsToAppRoles(
+      headers,
+      adminGroupId,
+      usersGroupId,
+      enterpriseSp.id, // <-- the fix: consenting tenant's SP object id
+    );
 
-    // Flow 5 — Persist group IDs into DB using focused function
+    // Flow 5 — Persist group IDs into DB
     await persistGroupIdsToDb(tenantUuid, adminGroupId, usersGroupId);
 
     console.log(
@@ -327,6 +363,7 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
     console.error("[POST-CONSENT] ❌ Post-consent flow error:", err.message);
   }
 };
+
 // ─── Consent Callback ─────────────────────────────────────────────────────────
 const consent_Callback = async (req, res) => {
   const { tenant, admin_consent, error } = req.query;
@@ -356,8 +393,11 @@ const consent_Callback = async (req, res) => {
   }
 
   try {
+    // IMPORTANT: getAccessToken(tenant) — pass the consenting tenant ID so the
+    // token is scoped to Seabreeze (or whichever tenant just consented), not SpartaServ.
+    // All downstream Graph calls run in the context of the consenting tenant.
     console.log(
-      "[CONSENT] Step 1 — Acquiring delegated token via getAccessToken...",
+      `[CONSENT] Step 1 — Acquiring token for consenting tenant=${tenant}...`,
     );
     const token = await getAccessToken(tenant);
     console.log("[CONSENT] Step 1 ✅ Token acquired");
@@ -424,7 +464,7 @@ const consent_Callback = async (req, res) => {
     );
     res.json({ redirectUrl: "/consent-callback?consent=success" });
 
-    // Fire-and-forget
+    // Fire-and-forget background provisioning using the consenting tenant's token
     runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
   } catch (err) {
     console.error("[CONSENT] ❌ Unhandled exception:", err.message);
@@ -432,4 +472,5 @@ const consent_Callback = async (req, res) => {
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
 };
+
 module.exports = { consent_Callback };
