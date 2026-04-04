@@ -1862,7 +1862,7 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
         await axios.patch(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
-            { statecode: 0, statuscode: 196780008 },
+            { statecode: 0, statuscode: 196780001, ss_ticketstage: 6 },
             {
                 headers: {
                     Authorization:      `Bearer ${token}`,
@@ -1875,6 +1875,7 @@ const reactivate_DynamicsTicket = async (req, res) => {
         );
 
         console.log(`[DYNAMICS] Ticket reactivated: ${dynamicsIncidentId}`);
+       
 
         const io = req.app.get("io");
         if (io) {
@@ -1918,6 +1919,8 @@ const reactivate_DynamicsTicket = async (req, res) => {
         });
     }
 };
+
+
 
 
 module.exports = {
