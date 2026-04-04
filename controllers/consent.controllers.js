@@ -327,107 +327,109 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
     console.error("[POST-CONSENT] ❌ Post-consent flow error:", err.message);
   }
 };
-
 // ─── Consent Callback ─────────────────────────────────────────────────────────
 const consent_Callback = async (req, res) => {
   const { tenant, admin_consent, error } = req.query;
   const adminOid = req.user?.oid || req.user?.sub;
 
+  console.log("[CONSENT] ── Callback received ──────────────────────────────");
+  console.log(
+    `[CONSENT] tenant=${tenant} | admin_consent=${admin_consent} | error=${error ?? "none"}`,
+  );
+  console.log(`[CONSENT] adminOid=${adminOid ?? "MISSING"}`);
+
   if (error || admin_consent !== "True") {
-    console.warn("[CONSENT] Failed or cancelled:", { tenant, error, admin_consent });
+    console.warn("[CONSENT] ❌ Failed or cancelled by Microsoft");
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
 
   if (!tenant) {
-    console.error("[CONSENT] Missing tenant in callback");
+    console.error("[CONSENT] ❌ Missing tenant param");
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
 
   if (!adminOid) {
-    console.error("[CONSENT] Missing admin OID from token — is validateToken applied to this route?");
+    console.error(
+      "[CONSENT] ❌ Missing adminOid — validateToken may have failed",
+    );
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
 
   try {
+    console.log(
+      "[CONSENT] Step 1 — Acquiring delegated token via getAccessToken...",
+    );
     const token = await getAccessToken(tenant);
+    console.log("[CONSENT] Step 1 ✅ Token acquired");
+
     const headers = { Authorization: `Bearer ${token}` };
 
-    // ── Fetch org info ──────────────────────────────────────────────────────
+    console.log("[CONSENT] Step 2 — Fetching org info from Graph...");
     const orgRes = await axios.get(`${GRAPH_URL}/organization`, { headers });
     const org = orgRes.data.value?.[0];
     const tenantName = org?.displayName ?? "Unknown";
     const tenantDomain =
       org?.verifiedDomains?.find((d) => d.isDefault)?.name ?? null;
+    console.log(
+      `[CONSENT] Step 2 ✅ org=${tenantName} | domain=${tenantDomain}`,
+    );
 
-    // ── Grant Graph permissions (non-blocking) ──────────────────────────────
+    console.log("[CONSENT] Step 3 — Granting Graph permissions...");
     try {
       await grantGraphPermissions(token);
+      console.log("[CONSENT] Step 3 ✅ Graph permissions granted");
     } catch (grantErr) {
-      console.warn("[CONSENT] Could not auto-grant Graph permissions:", grantErr.message);
+      console.warn(
+        "[CONSENT] Step 3 ⚠️ Could not auto-grant Graph permissions:",
+        grantErr.message,
+      );
     }
 
-    // ── Update isconsented in DB ────────────────────────────────────────────
+    console.log("[CONSENT] Step 4 — Updating isconsented in DB...");
     const consentResult = await client.query(
       `SELECT * FROM public.tenant_update_isconsented($1, $2)`,
       [tenant, true],
     );
     const updateRow = consentResult.rows[0];
+    console.log(
+      `[CONSENT] Step 4 result: updated=${updateRow?.updated} | message=${updateRow?.message}`,
+    );
 
     if (!updateRow?.updated) {
       console.error(
-        `[CONSENT] ❌ Tenant not found in DB — tenant=${tenant} name=${tenantName}`,
+        `[CONSENT] Step 4 ❌ Tenant not found in DB — tenant=${tenant}`,
       );
       return res.json({ redirectUrl: "/consent-callback?consent=failed" });
     }
+    console.log("[CONSENT] Step 4 ✅ DB consent flag updated");
 
-    // ── Resolve tenantuuid (isolated — never blocks the redirect) ───────────
-    let tenantUuid = null;
-    try {
-      const tenantRow = await client.query(
-        `SELECT tenantuuid
-         FROM public.tenant_get_map_with_entratenantid()
-         WHERE entratenantid = $1`,
-        [tenant],
+    console.log("[CONSENT] Step 5 — Resolving tenantuuid from DB...");
+    const tenantRow = await client.query(
+      `SELECT tenantuuid FROM public.tenant_get_map_with_entratenantid() WHERE entratenantid = $1`,
+      [tenant],
+    );
+    const tenantUuid = tenantRow.rows[0]?.tenantuuid ?? null;
+    console.log(`[CONSENT] Step 5 — tenantuuid=${tenantUuid ?? "NOT FOUND"}`);
+
+    if (!tenantUuid) {
+      console.error(
+        "[CONSENT] Step 5 ⚠️ tenantuuid missing — group IDs will not be persisted",
       );
-      tenantUuid = tenantRow.rows[0]?.tenantuuid ?? null;
-
-      if (!tenantUuid) {
-        console.warn(
-          `[CONSENT] ⚠️ Could not resolve tenantuuid for entratenantid=${tenant}`,
-        );
-      }
-    } catch (uuidErr) {
-      // Never let this block the redirect
-      console.error("[CONSENT] ❌ Failed to fetch tenantuuid:", uuidErr.message, uuidErr.stack);
+    } else {
+      console.log("[CONSENT] Step 5 ✅ tenantuuid resolved");
     }
 
-    console.log("[CONSENT] ✅ Admin approval received:");
-    console.log(`  Tenant ID   : ${tenant}`);
-    console.log(`  Tenant Name : ${tenantName}`);
-    console.log(`  Domain      : ${tenantDomain}`);
-    console.log(`  Admin OID   : ${adminOid}`);
-    console.log(`  Tenant UUID : ${tenantUuid ?? "not resolved"}`);
-    console.log(`  DB updated  : ${updateRow.updated}`);
-    console.log(`  Timestamp   : ${new Date().toISOString()}`);
-
-    // ── Respond immediately — never block on provisioning ───────────────────
+    console.log(
+      "[CONSENT] ✅ Responding with consent=success — firing background provisioning",
+    );
     res.json({ redirectUrl: "/consent-callback?consent=success" });
 
-    // ── Fire-and-forget post-consent provisioning ───────────────────────────
-    if (tenantUuid) {
-      runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
-    } else {
-      console.warn(
-        "[CONSENT] ⚠️ Skipping post-consent flow — tenantUuid could not be resolved",
-      );
-    }
+    // Fire-and-forget
+    runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
   } catch (err) {
-    console.error("[CONSENT] Callback error:", err.message, err.stack);
-    // Guard against double-send if res was already flushed
-    if (!res.headersSent) {
-      return res.json({ redirectUrl: "/consent-callback?consent=failed" });
-    }
+    console.error("[CONSENT] ❌ Unhandled exception:", err.message);
+    console.error(err.stack);
+    return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
 };
-
 module.exports = { consent_Callback };
