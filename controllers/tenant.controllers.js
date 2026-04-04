@@ -170,113 +170,80 @@ const get_Tenants = async (req, res) => {
 
 const check_ConsentStatus = async (req, res) => {
   try {
-    // ── STEP 1: Get tenantId from the validated token ──────────────────────
-    const tenantId = req.tenantId;
-    console.log("[CONSENT STATUS] Step 1 — tenantId from token:", tenantId);
+    const tenantId = req.tenantId; // from validateToken middleware
+    console.log("[CONSENT STATUS] Checking for tenantId:", tenantId);
 
-    if (!tenantId) {
-      return res.status(400).json({ error: "Unable to resolve tenantId from token" });
-    }
-
-    // ── STEP 2: Check if tenant already exists in DB ───────────────────────
-    console.log("[CONSENT STATUS] Step 2 — Querying DB for tenant...");
-    const existingResult = await client.query(
+    const result = await client.query(
       `SELECT * FROM public.tenant_get_map_with_entratenantid()
        WHERE entratenantid = $1`,
       [tenantId],
     );
 
-    let row = existingResult.rows[0] ?? null;
-    console.log("[CONSENT STATUS] Step 2 — DB result:", row ? "Found" : "Not found");
+    let row = result.rows[0] ?? null;
 
-    // ── STEP 3: If not found, call Graph with the USER'S token, then insert ─
+    // Auto-create tenant if not found
     if (!row) {
-      console.log("[CONSENT STATUS] Step 3 — Tenant not in DB. Calling Graph with user token...");
-
-      // Use the user's own Bearer token from the request header (already validated)
-      // This avoids needing app-level consent which doesn't exist yet for new tenants
-      const userBearerToken = req.headers?.authorization?.split(" ")[1] ?? null;
-
-      if (!userBearerToken) {
-        console.error("[CONSENT STATUS] Step 3 — No bearer token found in request headers");
-        return res.status(401).json({ error: "Missing authorization token" });
-      }
-
-      let tenantName = null;
-      let tenantEmail = null;
+      console.log(
+        "[CONSENT STATUS] Tenant not found, fetching from Graph and creating...",
+      );
 
       try {
-        console.log("[CONSENT STATUS] Step 3 — Fetching org info from Graph...");
+        const token = await getAccessToken(tenantId);
         const orgRes = await axios.get(`${GRAPH_URL}/organization`, {
-          headers: { Authorization: `Bearer ${userBearerToken}` },
-          params: { $select: "displayName,technicalNotificationMails" },
+          headers: { Authorization: `Bearer ${token}` },
+          params: {
+            $select: "id,displayName,technicalNotificationMails",
+          },
           timeout: 10000,
         });
 
         const org = orgRes.data.value?.[0];
-        if (org) {
-          tenantName  = org.displayName ?? null;
-          tenantEmail = org.technicalNotificationMails?.[0] ?? null;
-          console.log(`[CONSENT STATUS] Step 3 — Graph returned: name="${tenantName}" email="${tenantEmail}"`);
-        } else {
-          console.warn("[CONSENT STATUS] Step 3 — Graph returned no org data, falling back to token claims");
+
+        if (!org) {
+          return res
+            .status(404)
+            .json({
+              error: "Tenant organization not found in Microsoft Graph",
+            });
         }
+
+        const tenantName = org.displayName ?? null;
+        const tenantEmail = org.technicalNotificationMails?.[0] ?? null;
+        const createdBy = req.user?.oid ?? null;
+
+        await client.query(
+          "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7) AS tenantuuid",
+          [tenantId, tenantName, tenantEmail, createdBy, null, null, null],
+        );
+
+        console.log(
+          `[CONSENT STATUS] Tenant auto-created: ${tenantId} (${tenantName})`,
+        );
+
+        // Re-fetch the newly created row
+        const newResult = await client.query(
+          `SELECT * FROM public.tenant_get_map_with_entratenantid()
+           WHERE entratenantid = $1`,
+          [tenantId],
+        );
+        row = newResult.rows[0] ?? null;
       } catch (graphErr) {
-        // Graph failed (e.g. insufficient scope on user token) — fall back to token claims
-        console.warn("[CONSENT STATUS] Step 3 — Graph call failed, falling back to token claims:", graphErr.message);
+        console.error("[CONSENT STATUS] Auto-create failed:", graphErr.message);
+        return res
+          .status(500)
+          .json({ error: "Failed to auto-provision tenant" });
       }
-
-      // Fallback: use token claims if Graph didn't return anything
-      if (!tenantName) {
-        tenantName =
-          req.user?.name ||
-          req.user?.upn?.split("@")?.[1] ||
-          tenantId;
-        console.log(`[CONSENT STATUS] Step 3 — Using fallback tenantName: "${tenantName}"`);
-      }
-      if (!tenantEmail) {
-        tenantEmail = req.user?.upn ?? req.user?.email ?? null;
-        console.log(`[CONSENT STATUS] Step 3 — Using fallback tenantEmail: "${tenantEmail}"`);
-      }
-
-      const createdBy = req.user?.oid ?? null;
-
-      // ── STEP 4: Insert new tenant into DB ─────────────────────────────────
-      console.log("[CONSENT STATUS] Step 4 — Inserting new tenant into DB...");
-      await client.query(
-        "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7) AS tenantuuid",
-        [tenantId, tenantName, tenantEmail, createdBy, null, null, null],
-      );
-      console.log(`[CONSENT STATUS] Step 4 — Tenant inserted: ${tenantId} (${tenantName})`);
-
-      // ── STEP 5: Re-fetch the newly created row ────────────────────────────
-      console.log("[CONSENT STATUS] Step 5 — Re-fetching newly created tenant from DB...");
-      const newResult = await client.query(
-        `SELECT * FROM public.tenant_get_map_with_entratenantid()
-         WHERE entratenantid = $1`,
-        [tenantId],
-      );
-      row = newResult.rows[0] ?? null;
-
-      if (!row) {
-        console.error("[CONSENT STATUS] Step 5 — Re-fetch returned nothing after insert");
-        return res.status(500).json({ error: "Tenant was created but could not be retrieved" });
-      }
-
-      console.log("[CONSENT STATUS] Step 5 — Re-fetch successful");
     }
 
-    // ── STEP 6: Read flags from row and return ─────────────────────────────
-    const consented  = row.isconsented  === true;
-    const isactive   = row.isactive     === true;
-    const isapproved = row.isapproved   === true;
+    const consented = row?.isconsented === true;
+    const isactive = row?.isactive === true;
+    const isapproved = row?.isapproved === true;
 
     console.log(
-      `[CONSENT STATUS] Step 6 — Final flags: consented=${consented} isactive=${isactive} isapproved=${isapproved}`,
+      `[CONSENT STATUS] tenantId=${tenantId} consented=${consented} isactive=${isactive} isapproved=${isapproved}`,
     );
 
     return res.status(200).json({ consented, isactive, isapproved, tenantId });
-
   } catch (err) {
     console.error("[CONSENT STATUS ERROR]", err.message);
     return res.status(500).json({ error: "Internal Server Error" });
