@@ -32,6 +32,42 @@
 
 /**
  * @swagger
+ * /users/role:
+ *   get:
+ *     summary: Get a user's role from the database
+ *     tags: [Users]
+ *     parameters:
+ *       - in: query
+ *         name: entrauserid
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Entra User ID to lookup role for
+ *         example: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved user role
+ *         content:
+ *           application/json:
+ *             example:
+ *               - v_entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *                 v_userrole: "Admin"
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "entrauserid is required"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
+
+/**
+ * @swagger
  * /users/db:
  *   get:
  *     summary: Get users from the database

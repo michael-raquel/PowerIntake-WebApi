@@ -25,6 +25,69 @@ const get_Ticket = async (req, res) => {
     }
 };
 
+const get_Ticket_Home = async (req, res) => {
+    try {
+        const { entratenantid, entrauserid } = req.query;
+
+        const result = await client.query(
+            "SELECT * FROM public.ticket_get_home($1, $2)",
+            [entratenantid || null, entrauserid || null]
+        );
+
+        const rows = result.rows || [];
+
+        const totals = rows.length > 0 ? {
+            v_inprogress: rows[0].v_inprogress,
+            v_new: rows[0].v_new,
+            v_completed: rows[0].v_completed,
+            v_completionrate: rows[0].v_completionrate,
+            total_count: rows[0].total_count,
+        } : { v_inprogress: 0, v_new: 0, v_completed: 0, v_completionrate: 0, total_count: 0 };
+
+        const cleanRows = rows.map(r => {
+            const { v_inprogress, v_new, v_completed, v_completionrate, total_count, ...rest } = r;
+            return rest;
+        });
+
+        res.status(200).json({ rows: cleanRows, totals });
+    } catch (err) {
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
+const get_Ticket_Manager_Home = async (req, res) => {
+    try {
+        const { managerentrauserid, status } = req.query;
+
+        const result = await client.query(
+            "SELECT * FROM public.ticket_get_manager_home($1, $2)",
+            [managerentrauserid || null, status || null]
+        );
+
+        const rows = result.rows || [];
+
+        const totals = rows.length > 0 ? {
+            v_inprogress: rows[0].v_inprogress,
+            v_new: rows[0].v_new,
+            v_completed: rows[0].v_completed,
+            v_completionrate: rows[0].v_completionrate,
+            total_count: rows[0].total_count,
+        } : { v_inprogress: 0, v_new: 0, v_completed: 0, v_completionrate: 0, total_count: 0 };
+
+        const cleanRows = rows.map(r => {
+            const { v_inprogress, v_new, v_completed, v_completionrate, total_count, ...rest } = r;
+            return rest;
+        });
+
+        res.status(200).json({ rows: cleanRows, totals });
+    } catch (err) {
+        if (err.message) {
+            return res.status(400).json({ error: err.message });
+        }
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+
 const get_Ticket_Status = async (req, res) => {
     try {
 
@@ -585,6 +648,7 @@ const syncToDynamics = async ({
     const dynamicsIncidentId   = dynamicsRes.data?.incidentid  ?? null;
     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
     const dynamicsStatus       = dynamicsRes.data?.["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const ticketStatus       = dynamicsRes.data?.["statecode@OData.Community.Display.V1.FormattedValue"] ?? null;
     const sourceLabel          = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"]              ?? null;
     const category             = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]      ?? null;
     const duedate              = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"]             ?? null;
@@ -595,8 +659,8 @@ const syncToDynamics = async ({
 
     if (dynamicsIncidentId) {
         await client.query(
-            "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
+            "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, ticketStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
         );
 
         const updated = await client.query(
@@ -889,10 +953,10 @@ const db_loadUserMap = async () => {
 };
 
 const db_syncTicket = async (ticket, tenantid, userid, technicianname, entrauserid) => {
-    // const statusCode  = ticket.statuscode ?? null;
+
     const statusLabel =ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]
-                    //  ??  DYNAMICS_STATUSCODE_MAP[statusCode]
-                     ?? null;
+
+    const ticketstatus = ticket["statecode@OData.Community.Display.V1.FormattedValue"] ?? null;
                      
     const createdby = ticket.ss_Contact?.emailaddress1 ?? null;
 
@@ -901,7 +965,7 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname, entrauser
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
             $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-            $31,$32,$33,$34,$35,$36,$37,$38,$39,$40
+            $31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41
         )`,
         [
             ticket.incidentid,
@@ -937,6 +1001,7 @@ const db_syncTicket = async (ticket, tenantid, userid, technicianname, entrauser
             ticket["ss_tickettype@OData.Community.Display.V1.FormattedValue"]                               ?? null,
             ticket["prioritycode@OData.Community.Display.V1.FormattedValue"]                                ?? null,
             statusLabel,
+            ticketstatus,
             ticket.ss_quickfixflag                                                                          ?? null,
             ticket.ss_reason                                                                                ?? null,
             ticket.ss_resolveddate                                                                          ?? null,
@@ -1360,7 +1425,7 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
             `SELECT public.ticket_webhook_update(
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32
+                $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33
             )`,
             [
                 ticket.incidentid,                                                                                   // $1
@@ -1391,10 +1456,11 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
                 ticket["ss_tickettype@OData.Community.Display.V1.FormattedValue"]                           ?? null, // $26
                 ticket["prioritycode@OData.Community.Display.V1.FormattedValue"]                            ?? null, // $27
                 ticket["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"]                 ?? null,// $28
-                ticket.ss_quickfixflag?.toString()                                                         ?? null, // $29
-                ticket.ss_reason                                                                            ?? null, // $30
-                ticket.ss_completedonautotask                                                               ?? null, // $31
-                ticket.ss_resolution                                                                        ?? null, // $32
+                ticket["statecode@OData.Community.Display.V1.FormattedValue"]                           ?? null,// $29
+                ticket.ss_quickfixflag?.toString()                                                          ?? null, // $30
+                ticket.ss_reason                                                                            ?? null, // $31
+                ticket.ss_completedonautotask                                                               ?? null, // $32
+                ticket.ss_resolution                                                                        ?? null, // $33
             ]
         );
 
@@ -1775,7 +1841,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
 
 const reactivate_DynamicsTicket = async (req, res) => {
     try {
-        const { ticketuuid } = req.body;
+        const { ticketuuid, createdby } = req.body;
 
         if (!ticketuuid) {
             return res.status(400).json({ error: "ticketuuid is required" });
@@ -1796,10 +1862,7 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
         await axios.patch(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
-            {
-                statecode:  0,       
-                statuscode: 196780008 
-            },
+            { statecode: 0, statuscode: 196780001, ss_ticketstage: 6 },
             {
                 headers: {
                     Authorization:      `Bearer ${token}`,
@@ -1811,7 +1874,46 @@ const reactivate_DynamicsTicket = async (req, res) => {
             }
         );
 
+        await client.query(
+            `SELECT note_create_reactivate($1, $2)`,
+            [ticketuuid, createdby]
+        );
+
         console.log(`[DYNAMICS] Ticket reactivated: ${dynamicsIncidentId}`);
+       
+
+        const io = req.app.get("io");
+        if (io) {
+            try {
+                const ticketInfoResult = await client.query(
+                    `SELECT * FROM ticket_get_webhook_info($1::text[])`,
+                    [[dynamicsIncidentId]]
+                );
+                const ticketInfo = ticketInfoResult.rows[0] ?? null;
+
+                if (ticketInfo) {
+                    const updatedResult = await client.query(
+                        `SELECT * FROM public.ticket_get($1, NULL, NULL)`,
+                        [String(ticketuuid)]
+                    );
+                    const updatedTicket = updatedResult.rows[0] ?? null;
+
+                    const payload = {
+                        ticketuuid:         String(ticketuuid),
+                        dynamicsincidentid: dynamicsIncidentId,
+                        ticket:             updatedTicket,
+                    };
+
+                    if (ticketInfo.entrauserid) {
+                        io.to(ticketInfo.entrauserid).emit("ticket:reactivated", payload);
+                        console.log(`[WS] Emitted ticket:reactivated to: ${ticketInfo.entrauserid}`);
+                    }
+                }
+            } catch (wsErr) {
+                console.error("[REACTIVATE] Socket emit failed:", wsErr.message);
+            }
+        }
+
         return res.status(200).json({ message: "Ticket reactivated successfully", dynamicsIncidentId });
 
     } catch (err) {
@@ -1824,8 +1926,12 @@ const reactivate_DynamicsTicket = async (req, res) => {
 };
 
 
+
+
 module.exports = {
     get_Ticket,
+    get_Ticket_Home,
+    get_Ticket_Manager_Home,
     update_Ticket,
     get_Ticket_Status,
     get_ManagerTeamTickets,

@@ -310,6 +310,26 @@ const get_User_Info = async (req, res) => {
     }
 };
 
+const get_User_Role = async (req, res) => {
+  try {
+    const { entrauserid } = req.query;
+
+    if (!entrauserid) {
+      return res.status(400).json({ error: "entrauserid is required" });
+    }
+
+    const result = await client.query(
+      `SELECT * FROM public.user_get_role($1)`,
+      [entrauserid]
+    );
+
+    return res.status(200).json(result.rows);
+  } catch (err) {
+    console.error("get_User_Role error:", err.message);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 const update_UserRole = async (req, res) => {
   try {
     const { entrauserid, userrole, modifiedby } = req.body;
@@ -726,6 +746,7 @@ module.exports = {
   get_UserAppRoleAssignments,
   get_UserFromDb,
   get_User_Info,
+  get_User_Role,
   update_UserRole,
   sync_Users,
   create_user_onlogin,
