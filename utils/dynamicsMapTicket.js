@@ -11,13 +11,13 @@ const mapTicket = (ticket, technicianname, notes = []) => ({
         ss_ticketstage:              ticket["ss_ticketstage@OData.Community.Display.V1.FormattedValue"] ?? null,
         _primarycontactid_value:     ticket._primarycontactid_value,
         _ss_assignedtechnician_value: ticket._ss_assignedtechnician_value,
-        dynamicsaccountid:           ticket.customerid_account?.accountid
-                                  ?? ticket.ss_Contact?.parentcustomerid_account?.accountid
-                                  ?? null,
-        customername:                ticket["_customerid_value@OData.Community.Display.V1.FormattedValue"]
-                                  ?? ticket.customerid_account?.name
-                                  ?? ticket.ss_Contact?.parentcustomerid_account?.name
-                                  ?? null,
+        dynamicsaccountid:           ticket.customerid_account?.accountid,
+                                //   ?? ticket.ss_Contact?.parentcustomerid_account?.accountid
+                                //   ?? null,
+        customername:                ticket["_customerid_value@OData.Community.Display.V1.FormattedValue"],
+                                //   ?? ticket.customerid_account?.name
+                                //   ?? ticket.ss_Contact?.parentcustomerid_account?.name
+                                //   ?? null,
         contact:                     ticket.primarycontactid?.fullname ?? ticket.ss_Contact?.fullname ?? null,
         companycontactid:            ticket.primarycontactid?.contactid ?? ticket.ss_Contact?.contactid ?? null,
         companycontactemail:         ticket.ss_Contact?.emailaddress1 ?? null,

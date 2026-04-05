@@ -125,6 +125,41 @@
 
 /**
  * @swagger
+ * /users/user-info:
+ *   get:
+ *     summary: Get user info by Entra user ID from the database
+ *     tags: [Users]
+ *     parameters:
+ *       - in: query
+ *         name: entrauserid
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Microsoft Entra user ID
+ *         example: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved user info
+ *         content:
+ *           application/json:
+ *             example:
+ *               - useruuid: "340a5679-ad90-4275-b082-7375698f08fb"
+ *                 entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *                 username: "Juan dela Cruz"
+ *                 useremail: "juan@spartaservices.com"
+ *                 userrole: "User"
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "entrauserid is required"
+ *       500:
+ *         description: Internal Server Error
+ */
+
+/**
+ * @swagger
  * /users/role:
  *   put:
  *     summary: Update a user's role in the database
@@ -342,7 +377,6 @@
  *         description: No response from Microsoft Graph (Timeout or Network Issue)
  */
 
-
 /**
  * @swagger
  * /users/all-users-with-security-groups:
@@ -393,7 +427,6 @@
  *         description: No response from Microsoft Graph (Timeout or Network Issue)
  */
 
-
 /**
  * @swagger
  * /users/groups:
@@ -425,6 +458,57 @@
  *                   mail: "allstaff@sparta.com"
  *                   groupTypes: []
  *                   securityEnabled: true
+ *       504:
+ *         description: Timeout or Network Issue
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "No response from Microsoft Graph (Timeout or Network Issue)"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ *   post:
+ *     summary: Create a Microsoft Entra group
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           example:
+ *             tenantId: "1159156a-3971-429d-bb02-bd37b1223d24"
+ *             displayName: "Engineering Team"
+ *             mailNickname: "engineering-team"
+ *             mailEnabled: false
+ *             securityEnabled: true
+ *             groupTypes: []
+ *             description: "Engineering security group"
+ *             ownerOids:
+ *               - "aabbccdd-1234-5678-abcd-ef1234567890"
+ *             memberOids:
+ *               - "11223344-5566-7788-99aa-bbccddeeff00"
+ *     responses:
+ *       201:
+ *         description: Group created successfully
+ *         content:
+ *           application/json:
+ *             example:
+ *               id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+ *               displayName: "Engineering Team"
+ *               mailNickname: "engineering-team"
+ *               mailEnabled: false
+ *               securityEnabled: true
+ *               groupTypes: []
+ *       400:
+ *         description: Validation Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "displayName and mailNickname are required"
  *       504:
  *         description: Timeout or Network Issue
  *         content:
@@ -482,7 +566,6 @@
  *               error: "Internal Server Error"
  */
 
-
 /**
  * @swagger
  * /users/sync:
@@ -526,6 +609,59 @@
  *           application/json:
  *             example:
  *               error: "No response from Microsoft Graph (Timeout or Network Issue)"
+ *       500:
+ *         description: Internal Server Error
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Internal Server Error"
+ */
+
+/**
+ * @swagger
+ * /users/login-sync:
+ *   post:
+ *     summary: Create user in the database on first login
+ *     description: Uses JWT claims to create the user if it does not exist and returns existing user data if already present.
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: User created or already exists
+ *         content:
+ *           application/json:
+ *             examples:
+ *               created:
+ *                 summary: User created on first login
+ *                 value:
+ *                   message: "User created on login"
+ *                   user:
+ *                     entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *                     username: "Juan dela Cruz"
+ *                     useremail: "juan@spartaservices.com"
+ *                     userrole: "User"
+ *               existing:
+ *                 summary: User already exists
+ *                 value:
+ *                   message: "User already exists"
+ *                   user:
+ *                     entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
+ *                     username: "Juan dela Cruz"
+ *                     useremail: "juan@spartaservices.com"
+ *                     userrole: "User"
+ *       400:
+ *         description: Invalid token payload
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Invalid token: missing user or tenant ID"
+ *       403:
+ *         description: Tenant is not registered
+ *         content:
+ *           application/json:
+ *             example:
+ *               error: "Access denied: your organization is not registered in this system."
  *       500:
  *         description: Internal Server Error
  *         content:

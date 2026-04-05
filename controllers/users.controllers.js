@@ -589,7 +589,6 @@ const sync_Users = async (req, res) => {
     }
 };
 
-
 const create_user_onlogin = async (req, res) => {
   try {
     const entraUserId = req.user?.oid || req.user?.sub;
@@ -616,6 +615,39 @@ const create_user_onlogin = async (req, res) => {
 
     const tenant = tenantCheck.rows[0];
 
+// Always try to resolve and update dynamicsaccountid on tenant
+    let dynamicsAccountId = tenant.v_dynamicsaccountid ?? null;
+
+    if (!dynamicsAccountId) {
+      try {
+        const token = await getDynamicsToken();
+        const accountRes = await axios.get(
+          `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts?$filter=ss_azuretenantid eq '${tenantId}'&$select=accountid,name,ss_azuretenantid`,
+          {
+            headers: {
+              Authorization:      `Bearer ${token}`,
+              Accept:             "application/json",
+              "OData-Version":    "4.0",
+              "OData-MaxVersion": "4.0",
+            }
+          }
+        );
+        dynamicsAccountId = accountRes.data.value?.[0]?.accountid ?? null;
+        console.log("[LOGIN] Resolved dynamicsaccountid:", dynamicsAccountId);
+
+        // Update tenant immediately regardless of whether user exists
+        if (dynamicsAccountId) {
+          await client.query(
+            `SELECT public.tenant_update_dynamicsaccountid($1, $2)`,
+            [dynamicsAccountId, tenantId]
+          );
+        }
+      } catch (dynErr) {
+        console.warn("[LOGIN] Failed to resolve dynamicsaccountid:", dynErr.message);
+      }
+    }
+
+    // Now check existing user
     const existingUser = await client.query(
       `SELECT * FROM public.user_get_info($1)`,
       [entraUserId]
@@ -630,21 +662,22 @@ const create_user_onlogin = async (req, res) => {
     }
 
     await client.query(
-      `SELECT public.user_create_onlogin($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      `SELECT public.user_create_onlogin($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
-        entraUserId,        
-        tenantId,           
-        displayName,        
-        null,               
-        null,              
-        email,              
-        null,               
-        null,               
-        new Date().toISOString(), 
-        tenant.v_tenantname,     
-        tenant.v_tenantemail,   
-        userRole,          
-        "true",            
+        entraUserId,
+        tenantId,
+        displayName,
+        null,
+        null,
+        email,
+        null,
+        null,
+        new Date().toISOString(),
+        tenant.v_tenantname,
+        tenant.v_tenantemail,
+        userRole,
+        "true",
+        dynamicsAccountId,   
       ]
     );
 
@@ -666,6 +699,75 @@ const create_user_onlogin = async (req, res) => {
   }
 };
 
+const create_Group = async (req, res) => {
+  try {
+    const {
+      tenantId,          // optional — falls back to JWT if not provided
+      displayName,
+      mailNickname,
+      mailEnabled = false,
+      securityEnabled = true,
+      groupTypes = [],
+      description,
+      ownerOids = [],
+      memberOids = [],
+    } = req.body || {};
+
+    const resolvedTenantId = tenantId || req.tenantId; // ← body first, JWT fallback
+
+    if (!resolvedTenantId) {
+      return res.status(400).json({ error: "tenantId could not be resolved" });
+    }
+
+    if (!displayName || !mailNickname) {
+      return res.status(400).json({ error: "displayName and mailNickname are required" });
+    }
+
+    const token = await getAccessToken(resolvedTenantId);
+
+    const payload = {
+      displayName,
+      mailNickname,
+      mailEnabled,
+      securityEnabled,
+      groupTypes,
+      ...(description && { description }),
+      ...(ownerOids.length && {
+        "owners@odata.bind": ownerOids.map((oid) => `${GRAPH_URL}/users/${oid}`),
+      }),
+      ...(memberOids.length && {
+        "members@odata.bind": memberOids.map((oid) => `${GRAPH_URL}/users/${oid}`),
+      }),
+    };
+
+    const response = await axios.post(`${GRAPH_URL}/groups`, payload, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 10000,
+    });
+
+    return res.status(201).json(response.data);
+  } catch (err) {
+    console.error("create_Group error:", err.message);
+
+    if (err.response) {
+      return res.status(err.response.status).json({
+        error: err.response.data?.error?.message || "Graph API Error",
+      });
+    }
+
+    if (err.request) {
+      return res.status(504).json({
+        error: "No response from Microsoft Graph (Timeout or Network Issue)",
+      });
+    }
+
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 module.exports = {
   get_AllUsers,
   get_UserById,
@@ -680,5 +782,6 @@ module.exports = {
   get_User_Role,
   update_UserRole,
   sync_Users,
-  create_user_onlogin
+  create_user_onlogin,
+  create_Group,
 };

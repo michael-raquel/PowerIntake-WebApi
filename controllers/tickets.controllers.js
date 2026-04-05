@@ -908,7 +908,7 @@ const db_batchUpsertUsers = async (contactMap) => {
     const mobilephones   = contacts.map(([, c])    => c.mobilephone   ?? null);
     const departments    = contacts.map(([, c])    => c.department    ?? null);
     const userroles      = contacts.map(()         => "user");
-    const entratenantids = contacts.map(([, c])    => c.entraTenantId ?? null);
+    const entratenantids = contacts.map(([, c]) => c.entraTenantId || null);
     const entrauserids = contacts.map(([, c]) => c.entrauserid ?? null);
 
     try {
@@ -1841,7 +1841,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
 
 const reactivate_DynamicsTicket = async (req, res) => {
     try {
-        const { ticketuuid } = req.body;
+        const { ticketuuid, createdby } = req.body;
 
         if (!ticketuuid) {
             return res.status(400).json({ error: "ticketuuid is required" });
@@ -1862,7 +1862,7 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
         await axios.patch(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
-            { statecode: 0, statuscode: 196780008 },
+            { statecode: 0, statuscode: 196780001, ss_ticketstage: 6 },
             {
                 headers: {
                     Authorization:      `Bearer ${token}`,
@@ -1872,6 +1872,11 @@ const reactivate_DynamicsTicket = async (req, res) => {
                     "OData-MaxVersion": "4.0",
                 }
             }
+        );
+
+        await client.query(
+            `SELECT note_create_reactivate($1, $2)`,
+            [ticketuuid, createdby]
         );
 
         console.log(`[DYNAMICS] Ticket reactivated: ${dynamicsIncidentId}`);
@@ -1918,6 +1923,8 @@ const reactivate_DynamicsTicket = async (req, res) => {
         });
     }
 };
+
+
 
 
 module.exports = {

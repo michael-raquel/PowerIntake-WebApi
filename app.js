@@ -91,6 +91,9 @@ app.use("/notes", notes);
 const technician = require("./routes/technician.routes");
 app.use("/technicians", technician);
 
+const ticketstatusswitcher = require("./routes/ticketstatusswitcher.routes");
+app.use("/ticketstatusswitcher", ticketstatusswitcher);
+
 const PORT = process.env.PORT;
 
 server.listen(PORT, () => {
