@@ -1,6 +1,7 @@
 const client = require("../config/db");
 const axios = require("axios");
 const { getAccessToken } = require("../config/authService");
+const { getDynamicsToken } = require('../utils/dynamicsToken');
 
 const GRAPH_URL = "https://graph.microsoft.com/v1.0";
 
@@ -170,7 +171,7 @@ const get_Tenants = async (req, res) => {
 
 const check_ConsentStatus = async (req, res) => {
   try {
-    const tenantId = req.tenantId; // from validateToken middleware
+    const tenantId = req.tenantId; 
     console.log("[CONSENT STATUS] Checking for tenantId:", tenantId);
 
     const result = await client.query(
@@ -181,7 +182,6 @@ const check_ConsentStatus = async (req, res) => {
 
     let row = result.rows[0] ?? null;
 
-    // Auto-create tenant if not found
     if (!row) {
       console.log(
         "[CONSENT STATUS] Tenant not found, fetching from Graph and creating...",
@@ -207,14 +207,43 @@ const check_ConsentStatus = async (req, res) => {
             });
         }
 
-        const tenantName = org.displayName ?? null;
+        const tenantName  = org.displayName ?? null;
         const tenantEmail = org.technicalNotificationMails?.[0] ?? null;
-        const createdBy = req.user?.oid ?? null;
+        const createdBy   = req.user?.oid ?? null;
+        let dynamicsAccountId = null;
+
+        try {
+          const dynamicsToken = await getDynamicsToken();
+          const accountRes = await axios.get(
+            `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts?$filter=ss_azuretenantid eq '${tenantId}'&$select=accountid&$top=1`,
+            {
+              headers: {
+                Authorization:      `Bearer ${dynamicsToken}`,
+                Accept:             "application/json",
+                "OData-Version":    "4.0",
+                "OData-MaxVersion": "4.0",
+              }
+            }
+          );
+          dynamicsAccountId = accountRes.data.value?.[0]?.accountid ?? null;
+          console.log("[CONSENT STATUS] Resolved dynamicsaccountid:", dynamicsAccountId);
+        } catch (dynErr) {
+          console.warn("[CONSENT STATUS] Could not resolve dynamicsaccountid:", dynErr.message);
+        }
 
         await client.query(
           "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7) AS tenantuuid",
-          [tenantId, tenantName, tenantEmail, createdBy, null, null, null],
+          [tenantId, tenantName, tenantEmail, createdBy, dynamicsAccountId, null, null]
         );
+
+        // const tenantName = org.displayName ?? null;
+        // const tenantEmail = org.technicalNotificationMails?.[0] ?? null;
+        // const createdBy = req.user?.oid ?? null;
+
+        // await client.query(
+        //   "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7, $7) AS tenantuuid",
+        //   [tenantId, tenantName, tenantEmail, createdBy, null, null, null, ],
+        // );
 
         console.log(
           `[CONSENT STATUS] Tenant auto-created: ${tenantId} (${tenantName})`,

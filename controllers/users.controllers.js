@@ -589,7 +589,6 @@ const sync_Users = async (req, res) => {
     }
 };
 
-
 const create_user_onlogin = async (req, res) => {
   try {
     const entraUserId = req.user?.oid || req.user?.sub;
@@ -616,6 +615,39 @@ const create_user_onlogin = async (req, res) => {
 
     const tenant = tenantCheck.rows[0];
 
+// Always try to resolve and update dynamicsaccountid on tenant
+    let dynamicsAccountId = tenant.v_dynamicsaccountid ?? null;
+
+    if (!dynamicsAccountId) {
+      try {
+        const token = await getDynamicsToken();
+        const accountRes = await axios.get(
+          `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts?$filter=ss_azuretenantid eq '${tenantId}'&$select=accountid,name,ss_azuretenantid`,
+          {
+            headers: {
+              Authorization:      `Bearer ${token}`,
+              Accept:             "application/json",
+              "OData-Version":    "4.0",
+              "OData-MaxVersion": "4.0",
+            }
+          }
+        );
+        dynamicsAccountId = accountRes.data.value?.[0]?.accountid ?? null;
+        console.log("[LOGIN] Resolved dynamicsaccountid:", dynamicsAccountId);
+
+        // Update tenant immediately regardless of whether user exists
+        if (dynamicsAccountId) {
+          await client.query(
+            `SELECT public.tenant_update_dynamicsaccountid($1, $2)`,
+            [dynamicsAccountId, tenantId]
+          );
+        }
+      } catch (dynErr) {
+        console.warn("[LOGIN] Failed to resolve dynamicsaccountid:", dynErr.message);
+      }
+    }
+
+    // Now check existing user
     const existingUser = await client.query(
       `SELECT * FROM public.user_get_info($1)`,
       [entraUserId]
@@ -630,21 +662,22 @@ const create_user_onlogin = async (req, res) => {
     }
 
     await client.query(
-      `SELECT public.user_create_onlogin($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      `SELECT public.user_create_onlogin($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
-        entraUserId,        
-        tenantId,           
-        displayName,        
-        null,               
-        null,              
-        email,              
-        null,               
-        null,               
-        new Date().toISOString(), 
-        tenant.v_tenantname,     
-        tenant.v_tenantemail,   
-        userRole,          
-        "true",            
+        entraUserId,
+        tenantId,
+        displayName,
+        null,
+        null,
+        email,
+        null,
+        null,
+        new Date().toISOString(),
+        tenant.v_tenantname,
+        tenant.v_tenantemail,
+        userRole,
+        "true",
+        dynamicsAccountId,   
       ]
     );
 
