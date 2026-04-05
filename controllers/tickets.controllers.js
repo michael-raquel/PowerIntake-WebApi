@@ -908,7 +908,7 @@ const db_batchUpsertUsers = async (contactMap) => {
     const mobilephones   = contacts.map(([, c])    => c.mobilephone   ?? null);
     const departments    = contacts.map(([, c])    => c.department    ?? null);
     const userroles      = contacts.map(()         => "user");
-    const entratenantids = contacts.map(([, c])    => c.entraTenantId ?? null);
+    const entratenantids = contacts.map(([, c]) => c.entraTenantId || null);
     const entrauserids = contacts.map(([, c]) => c.entrauserid ?? null);
 
     try {
@@ -1880,7 +1880,6 @@ const reactivate_DynamicsTicket = async (req, res) => {
         );
 
         console.log(`[DYNAMICS] Ticket reactivated: ${dynamicsIncidentId}`);
-       
 
         const io = req.app.get("io");
         if (io) {
