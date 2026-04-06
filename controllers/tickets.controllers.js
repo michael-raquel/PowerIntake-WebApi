@@ -1067,7 +1067,7 @@ const db_syncTicketNotes = async (ticket, token) => {
     try {
         const url = `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`
             + `?$filter=_objectid_value eq ${ticket.incidentid}`
-            + `&$select=annotationid,subject,notetext,createdon,modifiedon,_objectid_value`
+            + `&$select=annotationid,subject,notetext,createdon,modifiedon,_objectid_value,isdocument,filename`
             + `&$expand=createdby($select=internalemailaddress)`;
 
         const notesRes = await axios.get(url, {
@@ -1094,14 +1094,18 @@ const db_syncTicketNotes = async (ticket, token) => {
 
         if (valid.length === 0) return;
 
-        const annotationids      = valid.map(n => n.annotationid);
+        const annotationids       = valid.map(n => n.annotationid);
         const dynamicsincidentids = valid.map(n => n._objectid_value);
-        const subjects           = valid.map(n => n.subject ?? 'Note');
-        const notetexts          = valid.map(n => stripHtml(n.notetext) ?? '');
-        const createdon          = valid.map(n => n.createdon ?? new Date().toISOString());
-        const modifiedon         = valid.map(n => n.modifiedon ?? n.createdon ?? new Date().toISOString());
-        const createdby          = valid.map(n => n.createdby?.internalemailaddress ?? null);
-        const modifiedby         = valid.map(() => null);
+        const subjects            = valid.map(n =>
+            n.isdocument && n.filename
+                ? 'File Uploaded'
+                : (n.subject ?? 'Note')
+        );
+        const notetexts           = valid.map(n => n.isdocument && n.filename ? 'File Uploaded' : (stripHtml(n.notetext) ?? ''));
+        const createdon           = valid.map(n => n.createdon ?? new Date().toISOString());
+        const modifiedon          = valid.map(n => n.modifiedon ?? n.createdon ?? new Date().toISOString());
+        const createdby           = valid.map(n => n.createdby?.internalemailaddress ?? null);
+        const modifiedby          = valid.map(() => null);
 
         await client.query(
             `SELECT public.note_sync_dynamics_batch($1, $2, $3, $4, $5, $6, $7, $8)`,
