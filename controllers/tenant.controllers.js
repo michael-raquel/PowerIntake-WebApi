@@ -65,6 +65,7 @@ const update_Tenant = async (req, res) => {
       usergroupid,
       isactive,
       isconsented,
+      isapproved, // ✅ added
     } = req.body;
 
     const parseBool = (value, key) => {
@@ -81,7 +82,7 @@ const update_Tenant = async (req, res) => {
     }
 
     await client.query(
-      "SELECT public.tenant_update($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+      "SELECT public.tenant_update($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)", // ✅ updated
       [
         tenantuuid,
         entratenantid,
@@ -92,7 +93,8 @@ const update_Tenant = async (req, res) => {
         usergroupid || null,
         parseBool(isactive, "isactive"),
         parseBool(isconsented, "isconsented"),
-      ],
+        parseBool(isapproved, "isapproved"), // ✅ added
+      ]
     );
 
     return res.status(200).json({
@@ -118,6 +120,7 @@ const get_Tenants = async (req, res) => {
       dynamicsaccountid,
       isconsented,
       isactive,
+      isapproved, // ✅ added
     } = req.query;
 
     const parsedTenantId =
@@ -132,14 +135,15 @@ const get_Tenants = async (req, res) => {
     }
 
     const result = await client.query(
-      "SELECT * FROM public.tenant_get_all($1, $2, $3, $4, $5)",
+      "SELECT * FROM public.tenant_get_all($1, $2, $3, $4, $5, $6)", // ✅ updated
       [
         parsedTenantId,
         entratenantid || null,
         dynamicsaccountid || null,
         isconsented || null,
         isactive || null,
-      ],
+        isapproved || null, // ✅ added
+      ]
     );
 
     const rows = result.rows.map((row) => ({
@@ -155,6 +159,7 @@ const get_Tenants = async (req, res) => {
       usergroupid: row.v_usergroupid,
       isconsented: row.v_isconsented,
       isactive: row.v_isactive,
+      isapproved: row.v_isapproved, // ✅ added
     }));
 
     return res.status(200).json(rows);
