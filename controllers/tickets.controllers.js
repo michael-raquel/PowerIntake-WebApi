@@ -472,7 +472,6 @@ const create_Ticket = async (req, res) => {
   }
 };
     
-
 const syncToDynamics = async ({
     io, token, entrauserid, entratenantid, ticketuuid, dynamicsAccountId,
     userInfo, title, description, usertimezone,
@@ -489,36 +488,58 @@ const syncToDynamics = async ({
             const tenant = tenantRes.rows[0];
 
             if (tenant) {
-                const createAccountRes = await axios.post(
-                    `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts`,
-                    {
-                        name:          tenant.tenantname,
-                        emailaddress1: tenant.tenantemail ?? null,
-                    },
+                const accountRes = await axios.get(
+                    `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts?$filter=emailaddress1 eq '${tenant.tenantemail}'&$select=accountid`,
                     {
                         headers: {
                             Authorization:      `Bearer ${token}`,
                             Accept:             "application/json",
-                            "Content-Type":     "application/json",
                             "OData-Version":    "4.0",
                             "OData-MaxVersion": "4.0",
-                            Prefer:             "return=representation",
-                        },
+                        }
                     }
                 );
 
-                dynamicsAccountId = createAccountRes.data?.accountid ?? null;
-                console.log("[DYNAMICS] Tenant account created:", dynamicsAccountId);
+                dynamicsAccountId = accountRes.data.value?.[0]?.accountid ?? null;
 
                 if (dynamicsAccountId) {
+                    console.log("[DYNAMICS] Tenant account already exists in Dynamics:", dynamicsAccountId);
                     await client.query(
                         "SELECT public.tenant_update_dynamicsaccountid($1, $2)",
                         [entratenantid, dynamicsAccountId]
                     );
+                } else {
+                    const createAccountRes = await axios.post(
+                        `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts`,
+                        {
+                            name:          tenant.tenantname,
+                            emailaddress1: tenant.tenantemail ?? null,
+                        },
+                        {
+                            headers: {
+                                Authorization:      `Bearer ${token}`,
+                                Accept:             "application/json",
+                                "Content-Type":     "application/json",
+                                "OData-Version":    "4.0",
+                                "OData-MaxVersion": "4.0",
+                                Prefer:             "return=representation",
+                            },
+                        }
+                    );
+
+                    dynamicsAccountId = createAccountRes.data?.accountid ?? null;
+                    console.log("[DYNAMICS] Tenant account created:", dynamicsAccountId);
+
+                    if (dynamicsAccountId) {
+                        await client.query(
+                            "SELECT public.tenant_update_dynamicsaccountid($1, $2)",
+                            [entratenantid, dynamicsAccountId]
+                        );
+                    }
                 }
             }
         } catch (tenantErr) {
-            console.error("[DYNAMICS] Failed to create tenant account:", tenantErr.response?.data || tenantErr.message);
+            console.error("[DYNAMICS] Failed to resolve/create tenant account:", tenantErr.response?.data || tenantErr.message);
         }
     }
 
@@ -648,7 +669,7 @@ const syncToDynamics = async ({
     const dynamicsIncidentId   = dynamicsRes.data?.incidentid  ?? null;
     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
     const dynamicsStatus       = dynamicsRes.data?.["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"] ?? null;
-    const ticketStatus       = dynamicsRes.data?.["statecode@OData.Community.Display.V1.FormattedValue"] ?? null;
+    const ticketStatus         = dynamicsRes.data?.["statecode@OData.Community.Display.V1.FormattedValue"] ?? null;
     const sourceLabel          = dynamicsRes.data?.["ss_source@OData.Community.Display.V1.FormattedValue"]              ?? null;
     const category             = dynamicsRes.data?.["ss_ticketcategory@OData.Community.Display.V1.FormattedValue"]      ?? null;
     const duedate              = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"]             ?? null;
@@ -708,7 +729,6 @@ const syncToDynamics = async ({
         }
     }
 };
-
 const syncUpdateToDynamics = async ({
     token, dynamicsIncidentId,
     title, description, usertimezone,
@@ -1047,7 +1067,7 @@ const db_syncTicketNotes = async (ticket, token) => {
     try {
         const url = `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`
             + `?$filter=_objectid_value eq ${ticket.incidentid}`
-            + `&$select=annotationid,subject,notetext,createdon,modifiedon,_objectid_value`
+            + `&$select=annotationid,subject,notetext,createdon,modifiedon,_objectid_value,isdocument,filename`
             + `&$expand=createdby($select=internalemailaddress)`;
 
         const notesRes = await axios.get(url, {
@@ -1074,14 +1094,18 @@ const db_syncTicketNotes = async (ticket, token) => {
 
         if (valid.length === 0) return;
 
-        const annotationids      = valid.map(n => n.annotationid);
+        const annotationids       = valid.map(n => n.annotationid);
         const dynamicsincidentids = valid.map(n => n._objectid_value);
-        const subjects           = valid.map(n => n.subject ?? 'Note');
-        const notetexts          = valid.map(n => stripHtml(n.notetext) ?? '');
-        const createdon          = valid.map(n => n.createdon ?? new Date().toISOString());
-        const modifiedon         = valid.map(n => n.modifiedon ?? n.createdon ?? new Date().toISOString());
-        const createdby          = valid.map(n => n.createdby?.internalemailaddress ?? null);
-        const modifiedby         = valid.map(() => null);
+        const subjects            = valid.map(n =>
+            n.isdocument && n.filename
+                ? 'File Uploaded'
+                : (n.subject ?? 'Note')
+        );
+        const notetexts           = valid.map(n => n.isdocument && n.filename ? 'File Uploaded' : (stripHtml(n.notetext) ?? ''));
+        const createdon           = valid.map(n => n.createdon ?? new Date().toISOString());
+        const modifiedon          = valid.map(n => n.modifiedon ?? n.createdon ?? new Date().toISOString());
+        const createdby           = valid.map(n => n.createdby?.internalemailaddress ?? null);
+        const modifiedby          = valid.map(() => null);
 
         await client.query(
             `SELECT public.note_sync_dynamics_batch($1, $2, $3, $4, $5, $6, $7, $8)`,
