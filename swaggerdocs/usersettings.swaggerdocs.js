@@ -161,9 +161,10 @@
  *         application/json:
  *           example:
  *             entrauserid: "aabbccdd-1234-5678-abcd-ef1234567890"
- *             ticketrecordcount: 50
- *             managerecordcount: 25
- *             modifiedby: "999e4567-e89b-12d3-a456-426614174999"
+ *             ticketrecordcount: "50"
+ *             managerecordcount: "25"
+ *             tenantrecordcount: "20"
+ *             modifiedby: "Jasper Manalo"
  *     responses:
  *       200:
  *         description: Successfully updated record counts
