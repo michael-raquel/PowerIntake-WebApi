@@ -99,6 +99,7 @@ const update_UserSettings_RecordCounts = async (req, res) => {
             entrauserid,
             ticketrecordcount,
             managerecordcount,
+            tenantrecordcount,
             modifiedby,
         } = req.body;
 
@@ -107,11 +108,12 @@ const update_UserSettings_RecordCounts = async (req, res) => {
         }
 
         await client.query(
-            "SELECT public.user_settings_record_counts_update($1, $2, $3, $4)",
+            "SELECT public.user_settings_record_counts_update($1, $2, $3, $4, $5)",
             [
                 entrauserid,
                 ticketrecordcount,
                 managerecordcount,
+                tenantrecordcount,
                 modifiedby,
             ]
         );
