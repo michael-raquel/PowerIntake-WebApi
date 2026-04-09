@@ -198,7 +198,6 @@ const get_Tenants = async (req, res) => {
 const check_ConsentStatus = async (req, res) => {
   try {
     const tenantId = req.tenantId;
-    const userToken = req.headers["authorization"]?.split(" ")[1];
     console.log("[CONSENT STATUS] ── Incoming request ──────────────────────");
     console.log(`[CONSENT STATUS] tenantId=${tenantId ?? "MISSING"}`);
 
@@ -216,40 +215,23 @@ const check_ConsentStatus = async (req, res) => {
     let row = result.rows[0] ?? null;
     console.log(`[CONSENT STATUS] Step 1 — row found: ${row !== null}`);
 
-    // ── Step 2: Auto-create from Graph API using user token ─────────────────
+    // ── Step 2: Auto-create from JWT claims (pre-consent) ───────────────────
     if (!row) {
-      console.log("[CONSENT STATUS] Step 2 — Tenant not in DB, fetching from Graph...");
+      console.log("[CONSENT STATUS] Step 2 — Tenant not in DB, creating from JWT claims...");
+      console.log("[CONSENT STATUS] Step 2 — Using JWT only (Graph unavailable pre-consent, SP doesn't exist yet)");
 
-      let tenantName  = null;
-      let tenantEmail = null;
-      const createdBy = req.user?.oid ?? null;
+      // JWT claims decoded by validateToken middleware — always available
+      const tenantName  = req.user?.name ?? null;
+      const tenantEmail = req.user?.preferred_username ?? null;
+      const createdBy   = req.user?.oid ?? null;
 
-      // ── Step 2a: Fetch org info from Graph using user's delegated token ───
-      try {
-        console.log("[CONSENT STATUS] Step 2a — Fetching org info from Graph...");
-        const orgRes = await axios.get(
-          `${GRAPH_URL}/organization?$select=displayName,technicalNotificationMails`,
-          {
-            headers: { Authorization: `Bearer ${userToken}` },
-            timeout: 8000,
-          },
-        );
-        const org = orgRes.data.value?.[0];
-        tenantName  = org?.displayName ?? null;
-        tenantEmail = org?.technicalNotificationMails?.[0] ?? null;
-        console.log(`[CONSENT STATUS] Step 2a ✅ Graph — name=${tenantName} | email=${tenantEmail}`);
-      } catch (graphErr) {
-        console.warn(`[CONSENT STATUS] Step 2a ⚠️ Graph fetch failed, using JWT fallback: ${graphErr.message}`);
-        tenantName  = req.user?.name ?? null;
-        tenantEmail = req.user?.preferred_username ?? null;
-      }
+      console.log(`[CONSENT STATUS] Step 2 — name=${tenantName} | email=${tenantEmail} | createdBy=${createdBy}`);
 
-      console.log(`[CONSENT STATUS] Step 2a — Final values — name=${tenantName} | email=${tenantEmail} | createdBy=${createdBy}`);
-
-      // ── Step 2b: Dynamics lookup — best-effort, non-fatal ─────────────────
+      // ── Step 2a: Dynamics lookup — best-effort, non-fatal ─────────────────
+      // Dynamics uses its own token (not the tenant's SP), so it works pre-consent
       let dynamicsAccountId = null;
       try {
-        console.log("[CONSENT STATUS] Step 2b — Dynamics lookup...");
+        console.log("[CONSENT STATUS] Step 2a — Dynamics lookup...");
         const dynamicsToken = await getDynamicsToken();
         const accountRes = await axios.get(
           `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts?$filter=ss_azuretenantid eq '${tenantId}'&$select=accountid&$top=1`,
@@ -264,26 +246,27 @@ const check_ConsentStatus = async (req, res) => {
           },
         );
         dynamicsAccountId = accountRes.data.value?.[0]?.accountid ?? null;
-        console.log(`[CONSENT STATUS] Step 2b ✅ dynamicsAccountId=${dynamicsAccountId ?? "not found"}`);
+        console.log(`[CONSENT STATUS] Step 2a ✅ dynamicsAccountId=${dynamicsAccountId ?? "not found"}`);
       } catch (dynErr) {
-        console.warn(`[CONSENT STATUS] Step 2b ⚠️ Dynamics lookup failed (non-fatal): ${dynErr.message}`);
+        console.warn(`[CONSENT STATUS] Step 2a ⚠️ Dynamics lookup failed (non-fatal): ${dynErr.message}`);
       }
 
-      // ── Step 2c: Insert tenant record ─────────────────────────────────────
+      // ── Step 2b: Insert minimal tenant record ─────────────────────────────
+      // isconsented defaults to false in DB — consent_Callback sets it to true later
       try {
-        console.log("[CONSENT STATUS] Step 2c — Inserting tenant into DB...");
+        console.log("[CONSENT STATUS] Step 2b — Inserting tenant into DB...");
         await client.query(
           "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7) AS tenantuuid",
           [tenantId, tenantName, tenantEmail, createdBy, dynamicsAccountId, null, null],
         );
-        console.log(`[CONSENT STATUS] Step 2c ✅ Tenant created — ${tenantId} (${tenantName})`);
+        console.log(`[CONSENT STATUS] Step 2b ✅ Tenant created — ${tenantId} (${tenantName})`);
       } catch (dbErr) {
-        console.error(`[CONSENT STATUS] Step 2c ❌ DB insert failed: ${dbErr.message}`);
+        console.error(`[CONSENT STATUS] Step 2b ❌ DB insert failed: ${dbErr.message}`);
         return res.status(500).json({ error: "Failed to register tenant" });
       }
 
-      // ── Step 2d: Re-fetch to confirm and get defaults ─────────────────────
-      console.log("[CONSENT STATUS] Step 2d — Re-fetching row after insert...");
+      // ── Step 2c: Re-fetch to confirm and get defaults ─────────────────────
+      console.log("[CONSENT STATUS] Step 2c — Re-fetching row after insert...");
       const newResult = await client.query(
         `SELECT * FROM public.tenant_get_map_with_entratenantid() WHERE entratenantid = $1`,
         [tenantId],
@@ -291,10 +274,10 @@ const check_ConsentStatus = async (req, res) => {
       row = newResult.rows[0] ?? null;
 
       if (!row) {
-        console.error("[CONSENT STATUS] Step 2d ❌ Row still missing after insert — DB/RLS issue");
+        console.error("[CONSENT STATUS] Step 2c ❌ Row still missing after insert — DB/RLS issue");
         return res.status(500).json({ error: "Failed to register tenant" });
       }
-      console.log("[CONSENT STATUS] Step 2d ✅ Row confirmed in DB");
+      console.log("[CONSENT STATUS] Step 2c ✅ Row confirmed in DB");
     }
 
     // ── Step 3: Return consent state ─────────────────────────────────────────
