@@ -24,6 +24,8 @@ const makeHeaders = (token) => ({
 });
 
 // ─── Step 1: Acquire Token ────────────────────────────────────────────────────
+// Uses client_credentials (app-only) flow. Only works AFTER the admin has
+// completed consent — the enterprise SP must exist in the tenant.
 
 const step1_acquireToken = async (tenant) => {
   console.log(`[STEP 1] Acquiring token for consenting tenant=${tenant}...`);
@@ -33,12 +35,15 @@ const step1_acquireToken = async (tenant) => {
 };
 
 // ─── Step 2: Fetch Org Info + Dynamics in Parallel ───────────────────────────
+// Both calls are independent — run them together to save time.
+// Both are non-fatal: if either fails we log a warning and continue with nulls.
 
 const step2_fetchOrgAndDynamics = async (token, tenant) => {
   console.log("[STEP 2] Fetching org info (Graph) + Dynamics accountid in parallel...");
   const headers = makeHeaders(token);
 
   const [orgResult, dynamicsResult] = await Promise.allSettled([
+    // Graph: get real org display name, email, verified domains
     axios.get(`${GRAPH_URL}/organization`, {
       headers,
       params: {
@@ -47,6 +52,7 @@ const step2_fetchOrgAndDynamics = async (token, tenant) => {
       timeout: 10000,
     }),
 
+    // Dynamics: resolve the CRM account linked to this Azure tenant
     (async () => {
       const dynamicsToken = await getDynamicsToken();
       return axios.get(
@@ -64,9 +70,10 @@ const step2_fetchOrgAndDynamics = async (token, tenant) => {
     })(),
   ]);
 
-  let tenantName   = null;
-  let tenantDomain = null;
-  let tenantEmail  = null;
+  // Graph result
+  let tenantName         = null;
+  let tenantDomain       = null;
+  let tenantEmail        = null;
   if (orgResult.status === "fulfilled") {
     const org    = orgResult.value.data.value?.[0];
     tenantName   = org?.displayName ?? null;
@@ -77,6 +84,7 @@ const step2_fetchOrgAndDynamics = async (token, tenant) => {
     console.warn(`[STEP 2] ⚠️ Graph org fetch failed (non-fatal): ${orgResult.reason?.message}`);
   }
 
+  // Dynamics result
   let dynamicsAccountId = null;
   if (dynamicsResult.status === "fulfilled") {
     dynamicsAccountId = dynamicsResult.value.data.value?.[0]?.accountid ?? null;
@@ -142,38 +150,62 @@ const step3_grantGraphPermissions = async (token) => {
   );
 };
 
-// ─── Step 4: Mark Tenant as Consented ────────────────────────────────────────
-// Uses tenant_update_isconsented(entratenantid, true) — a focused, atomic update
-// that only flips the isconsented flag without touching any other tenant fields.
+// ─── Step 4: Update Tenant in DB ──────────────────────────────────────────────
+// Fetches the current tenant row, merges with real Graph/Dynamics data,
+// sets isconsented=true, and calls tenant_update in a single atomic operation.
+// Replaces both the old step4_updateDbConsentFlag and step4a org patch.
 
-const step4_markTenantConsented = async (tenant) => {
-  console.log(`[STEP 4] Marking tenant as consented — entratenantid=${tenant}...`);
+const step4_updateTenantRecord = async (tenant, tenantName, tenantEmail, dynamicsAccountId) => {
+  console.log("[STEP 4] Fetching current tenant row for full update...");
 
-  const result = await client.query(
-    `SELECT updated, message FROM public.tenant_update_isconsented($1, $2)`,
-    [tenant, true],
-  );
-
-  const row = result.rows[0];
-  console.log(`[STEP 4] ✅ DB response — updated=${row?.updated} | message=${row?.message}`);
-
-  // Fetch tenantuuid separately so the background flow can use it for group persistence
-  const tenantRes = await client.query(
-    `SELECT tenantuuid FROM public.tenant WHERE entratenantid = $1`,
+  const currentRes = await client.query(
+    `SELECT * FROM public.tenant_get_map_with_entratenantid() WHERE entratenantid = $1`,
     [tenant],
   );
-  const tenantUuid = tenantRes.rows[0]?.tenantuuid ?? null;
+  const current = currentRes.rows[0];
 
-  if (!tenantUuid) {
-    console.warn(`[STEP 4] ⚠️ Could not resolve tenantuuid for tenant=${tenant} — group persistence will be skipped`);
-  } else {
-    console.log(`[STEP 4] ✅ Resolved tenantuuid=${tenantUuid}`);
+  if (!current) {
+    throw new Error(`Tenant not found in DB — tenant=${tenant}`);
   }
 
-  return tenantUuid;
+  console.log(`[STEP 4] Current row — tenantuuid=${current.tenantuuid} | name=${current.tenantname}`);
+
+  // Merge: prefer real Graph data, but ALWAYS fallback to existing DB value to prevent null constraint violations
+  const finalTenantName = tenantName || current.tenantname;
+  const finalTenantEmail = tenantEmail || current.tenantemail;
+  const finalDynamicsAccountId = dynamicsAccountId || current.dynamicsaccountid;
+
+  if (!finalTenantName) {
+    throw new Error(`Cannot update tenant — tenantname is null in both Graph and DB for tenant=${tenant}`);
+  }
+
+  await client.query(
+    `SELECT public.tenant_update($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      current.tenantuuid,
+      tenant,
+      finalTenantName,
+      finalTenantEmail,
+      finalDynamicsAccountId,
+      current.admingroupid,
+      current.usergroupid,
+      current.isactive ?? true,
+      true,
+      current.isapproved ?? false,
+    ],
+  );
+
+  console.log(
+    `[STEP 4] ✅ Tenant updated — isconsented=true | name=${finalTenantName} | email=${finalTenantEmail}`,
+  );
+
+  return current.tenantuuid;
 };
 
 // ─── Flow 1: Resolve Enterprise SP in Consenting Tenant ──────────────────────
+// CRITICAL for multi-tenant: each tenant gets its own SP object ID even though
+// the appId (clientId) is the same everywhere. resourceId in appRoleAssignments
+// must target the consenting tenant's SP, not the home tenant's.
 
 const flow1_resolveEnterpriseSp = async (headers) => {
   console.log("[FLOW 1] Resolving enterprise app SP in consenting tenant...");
@@ -196,10 +228,6 @@ const flow1_resolveEnterpriseSp = async (headers) => {
 };
 
 // ─── Flow 2: Ensure Groups Exist ─────────────────────────────────────────────
-// Creates PowerIntake.Admin and PowerIntake.Users if they don't already exist.
-// Returns the group IDs — these are stored on named variables and threaded
-// through the rest of the provisioning flow so every subsequent step uses the
-// same resolved IDs rather than making additional lookups.
 
 const flow2_ensureGroups = async (headers) => {
   console.log("[FLOW 2] Ensuring PowerIntake groups exist...");
@@ -228,30 +256,22 @@ const flow2_ensureGroups = async (headers) => {
     return res.data;
   };
 
-  // ── PowerIntake.Admin ──────────────────────────────────────────────────────
   let adminGroup = await findGroup("PowerIntake.Admin");
   if (adminGroup) {
     console.log(`[FLOW 2] Group already exists: PowerIntake.Admin → ${adminGroup.id}`);
   } else {
     adminGroup = await createGroup("PowerIntake.Admin");
   }
-  // Store the resolved admin group ID on a named variable for downstream flows
-  const adminGroupId = adminGroup.id;
 
-  // ── PowerIntake.Users ──────────────────────────────────────────────────────
   let usersGroup = await findGroup("PowerIntake.Users");
   if (usersGroup) {
     console.log(`[FLOW 2] Group already exists: PowerIntake.Users → ${usersGroup.id}`);
   } else {
     usersGroup = await createGroup("PowerIntake.Users");
   }
-  // Store the resolved users group ID on a named variable for downstream flows
-  const usersGroupId = usersGroup.id;
 
-  console.log(`[FLOW 2] ✅ Groups ensured — adminGroupId=${adminGroupId} | usersGroupId=${usersGroupId}`);
-
-  // Return both IDs so the orchestrator can pass them to all subsequent flows
-  return { adminGroupId, usersGroupId };
+  console.log("[FLOW 2] ✅ Groups ensured");
+  return { adminGroupId: adminGroup.id, usersGroupId: usersGroup.id };
 };
 
 // ─── Flow 3: Assign Global Admin to Both Groups ───────────────────────────────
@@ -295,6 +315,9 @@ const flow3_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersG
 };
 
 // ─── Flow 4: Batch Assign Active Tenant Users to PowerIntake.Users ────────────
+// Strategy 1: Standard $filter (works on most tenants)
+// Strategy 2: Advanced query mode with ConsistencyLevel: eventual (strict tenants)
+// Strategy 3: Unfiltered fallback — assigns all users regardless of account state
 
 const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
   console.log("[FLOW 4] Batch assigning active tenant users to PowerIntake.Users...");
@@ -343,6 +366,7 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
       console.warn("[FLOW 4] Strategy 3 — Falling back to fetching all users unfiltered...");
     }
 
+    // Strategy 3: No $filter — maximum compatibility, includes disabled accounts
     const fallbackUrl = `${GRAPH_URL}/users?$select=id&$top=999`;
     let users = [];
     let nextLink = fallbackUrl;
@@ -406,7 +430,9 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
 };
 
 // ─── Flow 5: Assign Groups to App Roles on Tenant's Enterprise SP ─────────────
-// Uses the adminGroupId and usersGroupId resolved in Flow 2 — no extra lookups.
+// KEY: enterpriseSpId is the SP object ID in the CONSENTING tenant.
+// In multi-tenant apps, each tenant's enterprise app gets its own object ID
+// even though appId is the same everywhere.
 
 const flow5_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId, enterpriseSpId) => {
   console.log(`[FLOW 5] Assigning groups to app roles on enterprise SP ${enterpriseSpId}...`);
@@ -442,12 +468,9 @@ const flow5_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId,
 };
 
 // ─── Flow 6: Persist Group IDs to DB ─────────────────────────────────────────
-// Receives the same adminGroupId and usersGroupId variables resolved in Flow 2.
-// Uses tenant_update_groups(tenantuuid, admingroupid, usergroupid).
 
 const flow6_persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId) => {
   console.log(`[FLOW 6] Persisting group IDs to DB for tenantUuid=${tenantUuid}...`);
-  console.log(`[FLOW 6] adminGroupId=${adminGroupId} | usersGroupId=${usersGroupId}`);
 
   await client.query(`SELECT public.tenant_update_groups($1, $2, $3)`, [
     tenantUuid,
@@ -459,32 +482,18 @@ const flow6_persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId)
 };
 
 // ─── Background Provisioning Orchestrator ────────────────────────────────────
-// Flow 2 resolves (or creates) both groups and returns their IDs as named variables.
-// Those same variables — adminGroupId and usersGroupId — are passed directly into
-// every subsequent flow so there is no duplication of group lookups and no risk
-// of a mismatch between the group used in one step and persisted in another.
 
 const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
   console.log("[POST-CONSENT] ── Starting background provisioning ────────────");
   const headers = makeHeaders(token);
 
   try {
-    // Flow 1 — Resolve the enterprise SP (needed by Flow 5 for app role assignment)
     const enterpriseSp = await flow1_resolveEnterpriseSp(headers);
-
-    // Flow 2 — Create or retrieve groups; capture IDs into named variables
     const { adminGroupId, usersGroupId } = await flow2_ensureGroups(headers);
-
-    // Flow 3 — Assign global admin to both groups using the resolved IDs
     await flow3_assignAdminToGroups(headers, adminOid, adminGroupId, usersGroupId);
-
-    // Flow 4 — Batch assign all tenant users to PowerIntake.Users
     await flow4_batchAssignUsersToGroup(headers, usersGroupId);
-
-    // Flow 5 — Assign both groups to their app roles on the enterprise SP
     await flow5_assignGroupsToAppRoles(headers, adminGroupId, usersGroupId, enterpriseSp.id);
 
-    // Flow 6 — Persist the same group IDs to the DB (tenant_update_groups)
     if (tenantUuid) {
       await flow6_persistGroupIdsToDb(tenantUuid, adminGroupId, usersGroupId);
     } else {
@@ -499,13 +508,17 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
 };
 
 // ─── Consent Callback (Main Entry Point) ─────────────────────────────────────
+// Phase 2 of the consent flow — called by /ms-consent-callback after the admin
+// approves on Microsoft's adminconsent page. By this point the enterprise app SP
+// exists in the tenant, so getAccessToken(tenant) works and Graph calls succeed.
+//
 // Sequence:
-//   Step 1 — Acquire app-only token (client_credentials, valid post-consent)
+//   Step 1 — Acquire app-only token (client_credentials, now valid post-consent)
 //   Step 2 — Fetch real org info (Graph) + Dynamics accountid IN PARALLEL
-//   Step 3 — Auto-grant Graph app permissions (non-fatal)
-//   Step 4 — Flip isconsented=true via tenant_update_isconsented; resolve tenantuuid
+//   Step 3 — Grant Graph app permissions (non-fatal)
+//   Step 4 — Single tenant_update: sets isconsented=true + patches real org info
 //   → Respond immediately with consent=success
-//   → Fire-and-forget: run group provisioning in background (Flows 1–6)
+//   → Fire-and-forget: run group provisioning in background
 
 const consent_Callback = async (req, res) => {
   const { tenant, admin_consent, error } = req.query;
@@ -531,7 +544,8 @@ const consent_Callback = async (req, res) => {
 
   try {
     // Step 1 — Acquire app-only token for the consenting tenant
-    const token = await step1_acquireToken(tenant);
+    const token   = await step1_acquireToken(tenant);
+    const headers = makeHeaders(token);
 
     // Step 2 — Graph org info + Dynamics in parallel (both non-fatal)
     const { tenantName, tenantDomain, tenantEmail, dynamicsAccountId } =
@@ -544,16 +558,16 @@ const consent_Callback = async (req, res) => {
       console.warn("[CONSENT] Step 3 ⚠️ Could not auto-grant Graph permissions:", grantErr.message);
     }
 
-    // Step 4 — Flip isconsented=true using the focused DB function;
-    //          also resolves tenantuuid for group persistence in Flow 6
-    const tenantUuid = await step4_markTenantConsented(tenant);
+    // Step 4 — Single atomic DB update: isconsented=true + real org info from Graph
+    // Returns tenantuuid so we don't need a separate round-trip
+    const tenantUuid = await step4_updateTenantRecord(tenant, tenantName, tenantEmail, dynamicsAccountId);
 
     // ── Respond immediately — don't block the browser on background provisioning
     console.log("[CONSENT] ✅ Responding with consent=success — firing background provisioning");
     res.json({ redirectUrl: "/consent-callback?consent=success" });
 
-    // ── Fire-and-forget: groups, user assignment, app role assignment, DB persist
-    // Brief delay ensures consent is fully propagated in Microsoft's directory
+    // ── Fire-and-forget: groups, user assignment, app role assignment
+    // Wait briefly to ensure consent is fully propagated before provisioning
     setTimeout(() => {
       runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
     }, 2000);
