@@ -3,7 +3,7 @@ const client = require("../config/db");
 const { getAccessToken } = require("../config/authService");
 const { getDynamicsToken } = require("../utils/dynamicsToken");
 
-const GRAPH_URL    = "https://graph.microsoft.com/v1.0";
+const GRAPH_URL = "https://graph.microsoft.com/v1.0";
 const GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000";
 
 const REQUIRED_GRAPH_ROLES = [
@@ -13,8 +13,8 @@ const REQUIRED_GRAPH_ROLES = [
   "5b567255-7703-4780-807c-7be8301ae99b", // Group.Read.All
 ];
 
-const ADMIN_APP_ROLE_ID = "3d316243-5776-4d70-93e0-0762378f97ed"; // PowerIntake.Admin
-const USERS_APP_ROLE_ID = "154626a2-3572-4da2-9b85-050ff2f833d8"; // PowerIntake.Users
+const ADMIN_APP_ROLE_ID = "3d316243-5776-4d70-93e0-0762378f97ed";
+const USERS_APP_ROLE_ID = "154626a2-3572-4da2-9b85-050ff2f833d8";
 
 const makeHeaders = (token) => ({
   Authorization: `Bearer ${token}`,
@@ -58,7 +58,7 @@ const step2_fetchOrgAndDynamics = async (token, tenant) => {
   ]);
 
   let tenantName = null, tenantEmail = null, dynamicsAccountId = null;
-  
+
   if (orgResult.status === "fulfilled") {
     const org = orgResult.value.data.value?.[0];
     tenantName = org?.displayName ?? null;
@@ -175,19 +175,16 @@ const step5_resolveEnterpriseSp = async (headers) => {
 const step6_ensureGroups = async (headers) => {
   console.log("[STEP 6] Ensuring PowerIntake groups exist...");
 
-  const findOrCreateGroup = async (displayName) => {
-    const findRes = await axios.get(
+  const findGroup = async (displayName) => {
+    const res = await axios.get(
       `${GRAPH_URL}/groups?$filter=displayName eq '${displayName}'&$select=id,displayName`,
       { headers, timeout: 10000 },
     );
-    const existing = findRes.data.value?.[0];
-    
-    if (existing) {
-      console.log(`[STEP 6] Group already exists: ${displayName} → ${existing.id}`);
-      return { group: existing, wasCreated: false };
-    }
+    return res.data.value?.[0] ?? null;
+  };
 
-    const createRes = await axios.post(
+  const createGroup = async (displayName) => {
+    const res = await axios.post(
       `${GRAPH_URL}/groups`,
       {
         displayName,
@@ -198,63 +195,69 @@ const step6_ensureGroups = async (headers) => {
       },
       { headers, timeout: 10000 },
     );
-    console.log(`[STEP 6] Created group: ${displayName} → ${createRes.data.id}`);
-    return { group: createRes.data, wasCreated: true };
+    console.log(`[STEP 6] Created group: ${displayName} → ${res.data.id}`);
+    return res.data;
   };
 
-  const adminResult = await findOrCreateGroup("PowerIntake.Admin");
-  const usersResult = await findOrCreateGroup("PowerIntake.Users");
+  let adminGroup = await findGroup("PowerIntake.Admin");
+  if (adminGroup) {
+    console.log(`[STEP 6] Group already exists: PowerIntake.Admin → ${adminGroup.id}`);
+  } else {
+    adminGroup = await createGroup("PowerIntake.Admin");
+  }
 
-  // If any group was just created, wait for Graph propagation
-  if (adminResult.wasCreated || usersResult.wasCreated) {
-    console.log("[STEP 6] Waiting 3 seconds for Graph propagation...");
-    await new Promise(resolve => setTimeout(resolve, 3000));
+  let usersGroup = await findGroup("PowerIntake.Users");
+  if (usersGroup) {
+    console.log(`[STEP 6] Group already exists: PowerIntake.Users → ${usersGroup.id}`);
+  } else {
+    usersGroup = await createGroup("PowerIntake.Users");
   }
 
   console.log("[STEP 6] ✅ Groups ensured");
-  return { adminGroupId: adminResult.group.id, usersGroupId: usersResult.group.id };
+  return { adminGroupId: adminGroup.id, usersGroupId: usersGroup.id };
 };
 
 // ─── Step 7: Assign Global Admin to Both Groups ──────────────────────────────
 const step7_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersGroupId) => {
   console.log(`[STEP 7] Assigning admin ${adminOid} to both groups...`);
 
-  const addToGroup = async (groupId, groupName) => {
+  const addToGroup = async (groupId) => {
+    try {
+      const checkRes = await axios.get(
+        `${GRAPH_URL}/groups/${groupId}/members?$filter=id eq '${adminOid}'&$select=id`,
+        { headers, timeout: 10000 },
+      );
+      if (checkRes.data.value?.length > 0) {
+        console.log(`[STEP 7] Admin ${adminOid} already member of group ${groupId}`);
+        return;
+      }
+    } catch (e) {
+      console.warn(`[STEP 7] Member check skipped for group ${groupId}, attempting add:`, e.message);
+    }
+
     try {
       await axios.post(
         `${GRAPH_URL}/groups/${groupId}/members/$ref`,
         { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
         { headers, timeout: 10000 },
       );
-      console.log(`[STEP 7] ✅ Added admin to ${groupName}`);
+      console.log(`[STEP 7] Added admin ${adminOid} to group ${groupId}`);
     } catch (err) {
-      const errMsg = err.response?.data?.error?.message ?? err.message;
-      
-      if (err.response?.status === 400 && errMsg.toLowerCase().includes("already exist")) {
-        console.log(`[STEP 7] Admin already in ${groupName} (skipped)`);
-      } else if (err.response?.status === 404 || errMsg.includes("does not exist")) {
-        // Retry once after a delay if group not found (propagation issue)
-        console.warn(`[STEP 7] Group not found, waiting 2s and retrying...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        try {
-          await axios.post(
-            `${GRAPH_URL}/groups/${groupId}/members/$ref`,
-            { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
-            { headers, timeout: 10000 },
-          );
-          console.log(`[STEP 7] ✅ Added admin to ${groupName} (retry succeeded)`);
-        } catch (retryErr) {
-          throw new Error(`Failed to add admin to ${groupName} after retry: ${retryErr.response?.data?.error?.message ?? retryErr.message}`);
-        }
+      if (
+        err.response?.status === 400 &&
+        err.response?.data?.error?.message?.toLowerCase().includes("already exist")
+      ) {
+        console.log(`[STEP 7] Admin already in group ${groupId} (conflict ignored)`);
       } else {
-        throw new Error(`Failed to add admin to ${groupName}: ${errMsg}`);
+        console.warn(
+          `[STEP 7] Failed to add admin to group ${groupId}:`,
+          err.response?.data?.error?.message ?? err.message,
+        );
       }
     }
   };
 
-  await addToGroup(adminGroupId, "PowerIntake.Admin");
-  await addToGroup(usersGroupId, "PowerIntake.Users");
+  await Promise.allSettled([addToGroup(adminGroupId), addToGroup(usersGroupId)]);
   console.log("[STEP 7] ✅ Admin assignment complete");
 };
 
@@ -271,7 +274,7 @@ const step8_batchAssignUsersToGroup = async (headers, usersGroupId) => {
   }
 
   if (allUsers.length === 0) {
-    console.log("[STEP 8] No users found in tenant");
+    console.log("[STEP 8] No users found in tenant for group assignment");
     return;
   }
 
@@ -297,12 +300,16 @@ const step8_batchAssignUsersToGroup = async (headers, usersGroupId) => {
   const chunkSize = 20;
   for (let i = 0; i < usersToAdd.length; i += chunkSize) {
     const chunk = usersToAdd.slice(i, i + chunkSize);
-    await axios.patch(
-      `${GRAPH_URL}/groups/${usersGroupId}`,
-      { "members@odata.bind": chunk.map((u) => `${GRAPH_URL}/directoryObjects/${u.id}`) },
-      { headers, timeout: 15000 },
-    );
-    console.log(`[STEP 8] Users chunk added: ${i + 1}–${Math.min(i + chunkSize, usersToAdd.length)} of ${usersToAdd.length}`);
+    try {
+      await axios.patch(
+        `${GRAPH_URL}/groups/${usersGroupId}`,
+        { "members@odata.bind": chunk.map((u) => `${GRAPH_URL}/directoryObjects/${u.id}`) },
+        { headers, timeout: 15000 },
+      );
+      console.log(`[STEP 8] Users chunk added: ${i + 1}–${Math.min(i + chunkSize, usersToAdd.length)} of ${usersToAdd.length}`);
+    } catch (err) {
+      console.warn(`[STEP 8] Chunk ${i} failed:`, err.response?.data?.error?.message ?? err.message);
+    }
   }
 
   console.log("[STEP 8] ✅ Batch user assignment complete");
@@ -322,7 +329,7 @@ const step9_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId,
     );
 
     if (alreadyAssigned) {
-      console.log(`[STEP 9] ${label} already assigned (skipped)`);
+      console.log(`[STEP 9] ${label} already assigned to appRole ${appRoleId} on SP ${enterpriseSpId}`);
       return;
     }
 
@@ -331,11 +338,14 @@ const step9_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId,
       { principalId: groupId, resourceId: enterpriseSpId, appRoleId },
       { headers, timeout: 10000 },
     );
-    console.log(`[STEP 9] ✅ Assigned ${label} → appRole ${appRoleId}`);
+    console.log(`[STEP 9] Assigned ${label} → appRole ${appRoleId} on SP ${enterpriseSpId}`);
   };
 
-  await assignGroupRole(adminGroupId, ADMIN_APP_ROLE_ID, "PowerIntake.Admin");
-  await assignGroupRole(usersGroupId, USERS_APP_ROLE_ID, "PowerIntake.Users");
+  await Promise.allSettled([
+    assignGroupRole(adminGroupId, ADMIN_APP_ROLE_ID, "PowerIntake.Admin"),
+    assignGroupRole(usersGroupId, USERS_APP_ROLE_ID, "PowerIntake.Users"),
+  ]);
+
   console.log("[STEP 9] ✅ App role assignment complete");
 };
 
