@@ -272,38 +272,26 @@ const flow2_ensureGroups = async (headers) => {
 const flow3_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersGroupId) => {
   console.log(`[FLOW 3] Assigning admin ${adminOid} to both groups...`);
 
-  const addToGroup = async (groupId) => {
-    try {
-      const checkRes = await axios.get(
-        `${GRAPH_URL}/groups/${groupId}/members?$filter=id eq '${adminOid}'&$select=id`,
-        { headers, timeout: 10000 },
-      );
-      if (checkRes.data.value?.length > 0) {
-        console.log(`[FLOW 3] Admin already a member of group ${groupId}`);
-        return;
-      }
-    } catch (e) {
-      console.warn(`[FLOW 3] Member check skipped for group ${groupId}, attempting add:`, e.message);
-    }
-
+  const addToGroup = async (groupId, groupName) => {
     try {
       await axios.post(
         `${GRAPH_URL}/groups/${groupId}/members/$ref`,
         { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
         { headers, timeout: 10000 },
       );
-      console.log(`[FLOW 3] Added admin ${adminOid} to group ${groupId}`);
+      console.log(`[FLOW 3] ✅ Added admin ${adminOid} to ${groupName}`);
     } catch (err) {
       const msg = err.response?.data?.error?.message ?? err.message;
       if (err.response?.status === 400 && msg?.toLowerCase().includes("already exist")) {
-        console.log(`[FLOW 3] Admin already in group ${groupId} (conflict ignored)`);
+        console.log(`[FLOW 3] Admin already in ${groupName} (skipped)`);
       } else {
-        console.warn(`[FLOW 3] Failed to add admin to group ${groupId}:`, msg);
+        console.warn(`[FLOW 3] ⚠️ Failed to add admin to ${groupName}:`, msg);
       }
     }
   };
 
-  await Promise.allSettled([addToGroup(adminGroupId), addToGroup(usersGroupId)]);
+  await addToGroup(adminGroupId, "PowerIntake.Admin");
+  await addToGroup(usersGroupId, "PowerIntake.Users");
   console.log("[FLOW 3] ✅ Admin assignment complete");
 };
 
