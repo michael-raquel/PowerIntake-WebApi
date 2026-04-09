@@ -184,7 +184,7 @@ const step6_ensureGroups = async (headers) => {
     
     if (existing) {
       console.log(`[STEP 6] Group already exists: ${displayName} → ${existing.id}`);
-      return { group: existing, wasCreated: false };
+      return existing;
     }
 
     const createRes = await axios.post(
@@ -199,20 +199,14 @@ const step6_ensureGroups = async (headers) => {
       { headers, timeout: 10000 },
     );
     console.log(`[STEP 6] Created group: ${displayName} → ${createRes.data.id}`);
-    return { group: createRes.data, wasCreated: true };
+    return createRes.data;
   };
 
-  const adminResult = await findOrCreateGroup("PowerIntake.Admin");
-  const usersResult = await findOrCreateGroup("PowerIntake.Users");
-
-  // If any group was just created, wait for Graph propagation
-  if (adminResult.wasCreated || usersResult.wasCreated) {
-    console.log("[STEP 6] Waiting 3 seconds for Graph propagation...");
-    await new Promise(resolve => setTimeout(resolve, 3000));
-  }
+  const adminGroup = await findOrCreateGroup("PowerIntake.Admin");
+  const usersGroup = await findOrCreateGroup("PowerIntake.Users");
 
   console.log("[STEP 6] ✅ Groups ensured");
-  return { adminGroupId: adminResult.group.id, usersGroupId: usersResult.group.id };
+  return { adminGroupId: adminGroup.id, usersGroupId: usersGroup.id };
 };
 
 // ─── Step 7: Assign Global Admin to Both Groups ──────────────────────────────
@@ -228,27 +222,10 @@ const step7_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersG
       );
       console.log(`[STEP 7] ✅ Added admin to ${groupName}`);
     } catch (err) {
-      const errMsg = err.response?.data?.error?.message ?? err.message;
-      
-      if (err.response?.status === 400 && errMsg.toLowerCase().includes("already exist")) {
+      if (err.response?.status === 400 && err.response?.data?.error?.message?.toLowerCase().includes("already exist")) {
         console.log(`[STEP 7] Admin already in ${groupName} (skipped)`);
-      } else if (err.response?.status === 404 || errMsg.includes("does not exist")) {
-        // Retry once after a delay if group not found (propagation issue)
-        console.warn(`[STEP 7] Group not found, waiting 2s and retrying...`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        try {
-          await axios.post(
-            `${GRAPH_URL}/groups/${groupId}/members/$ref`,
-            { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
-            { headers, timeout: 10000 },
-          );
-          console.log(`[STEP 7] ✅ Added admin to ${groupName} (retry succeeded)`);
-        } catch (retryErr) {
-          throw new Error(`Failed to add admin to ${groupName} after retry: ${retryErr.response?.data?.error?.message ?? retryErr.message}`);
-        }
       } else {
-        throw new Error(`Failed to add admin to ${groupName}: ${errMsg}`);
+        throw new Error(`Failed to add admin to ${groupName}: ${err.response?.data?.error?.message ?? err.message}`);
       }
     }
   };
