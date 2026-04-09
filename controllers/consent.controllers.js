@@ -171,23 +171,14 @@ const step4_updateTenantRecord = async (tenant, tenantName, tenantEmail, dynamic
   console.log(`[STEP 4] Current row — tenantuuid=${current.tenantuuid} | name=${current.tenantname}`);
 
   // Merge: prefer real Graph data over the JWT-claim placeholder set during check_ConsentStatus
-  // CRITICAL: Ensure tenantname is never null — fallback to current value
-  const finalTenantName = tenantName || current.tenantname;
-  const finalTenantEmail = tenantEmail || current.tenantemail;
-  const finalDynamicsAccountId = dynamicsAccountId || current.dynamicsaccountid;
-
-  if (!finalTenantName) {
-    throw new Error(`Cannot update tenant — tenantname is null in both Graph and DB for tenant=${tenant}`);
-  }
-
   await client.query(
     `SELECT public.tenant_update($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       current.tenantuuid,                              // p_tenantuuid
       tenant,                                           // p_entratenantid
-      finalTenantName,                                  // p_tenantname      — real org name from Graph or existing
-      finalTenantEmail,                                 // p_tenantemail     — real org email from Graph or existing
-      finalDynamicsAccountId,                           // p_dynamicsaccountid
+      tenantName        ?? current.tenantname,          // p_tenantname      — real org name from Graph
+      tenantEmail       ?? current.tenantemail,         // p_tenantemail     — real org email from Graph
+      dynamicsAccountId ?? current.dynamicsaccountid,   // p_dynamicsaccountid
       current.admingroupid,                             // p_admingroupid    — preserve (set by flow6 later)
       current.usergroupid,                              // p_usergroupid     — preserve (set by flow6 later)
       current.isactive  ?? true,                        // p_isactive        — preserve
@@ -197,7 +188,7 @@ const step4_updateTenantRecord = async (tenant, tenantName, tenantEmail, dynamic
   );
 
   console.log(
-    `[STEP 4] ✅ Tenant updated — isconsented=true | name=${finalTenantName} | email=${finalTenantEmail ?? 'null'}`,
+    `[STEP 4] ✅ Tenant updated — isconsented=true | name=${tenantName ?? current.tenantname} | email=${tenantEmail ?? current.tenantemail}`,
   );
 
   // Return tenantuuid so the caller doesn't need a second DB round-trip
