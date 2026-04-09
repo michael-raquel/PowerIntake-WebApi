@@ -272,38 +272,27 @@ const flow2_ensureGroups = async (headers) => {
 const flow3_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersGroupId) => {
   console.log(`[FLOW 3] Assigning admin ${adminOid} to both groups...`);
 
-  const addToGroup = async (groupId) => {
-    try {
-      const checkRes = await axios.get(
-        `${GRAPH_URL}/groups/${groupId}/members?$filter=id eq '${adminOid}'&$select=id`,
-        { headers, timeout: 10000 },
-      );
-      if (checkRes.data.value?.length > 0) {
-        console.log(`[FLOW 3] Admin already a member of group ${groupId}`);
-        return;
-      }
-    } catch (e) {
-      console.warn(`[FLOW 3] Member check skipped for group ${groupId}, attempting add:`, e.message);
-    }
-
+  const addToGroup = async (groupId, groupName) => {
     try {
       await axios.post(
         `${GRAPH_URL}/groups/${groupId}/members/$ref`,
         { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
         { headers, timeout: 10000 },
       );
-      console.log(`[FLOW 3] Added admin ${adminOid} to group ${groupId}`);
+      console.log(`[FLOW 3] ✅ Added admin ${adminOid} to ${groupName}`);
     } catch (err) {
       const msg = err.response?.data?.error?.message ?? err.message;
       if (err.response?.status === 400 && msg?.toLowerCase().includes("already exist")) {
-        console.log(`[FLOW 3] Admin already in group ${groupId} (conflict ignored)`);
+        console.log(`[FLOW 3] Admin already in ${groupName} (skipped)`);
       } else {
-        console.warn(`[FLOW 3] Failed to add admin to group ${groupId}:`, msg);
+        console.error(`[FLOW 3] ❌ Failed to add admin to ${groupName}:`, msg);
+        throw err; // Re-throw to ensure we know about real failures
       }
     }
   };
 
-  await Promise.allSettled([addToGroup(adminGroupId), addToGroup(usersGroupId)]);
+  await addToGroup(adminGroupId, "PowerIntake.Admin");
+  await addToGroup(usersGroupId, "PowerIntake.Users");
   console.log("[FLOW 3] ✅ Admin assignment complete");
 };
 
@@ -401,6 +390,9 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
   console.log(`[FLOW 4] Adding ${usersToAdd.length} users (${existingMemberIds.size} already members)...`);
 
   const chunkSize = 20;
+  let successCount = 0;
+  let failCount = 0;
+
   for (let i = 0; i < usersToAdd.length; i += chunkSize) {
     const chunk    = usersToAdd.slice(i, i + chunkSize);
     const rangeEnd = Math.min(i + chunkSize, usersToAdd.length);
@@ -413,13 +405,17 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
         },
         { headers, timeout: 15000 },
       );
-      console.log(`[FLOW 4] Users chunk added: ${i + 1}–${rangeEnd} of ${usersToAdd.length}`);
+      successCount += chunk.length;
+      console.log(`[FLOW 4] ✅ Users chunk added: ${i + 1}–${rangeEnd} of ${usersToAdd.length}`);
     } catch (err) {
-      console.warn(`[FLOW 4] Chunk ${i} failed:`, err.response?.data?.error?.message ?? err.message);
+      failCount += chunk.length;
+      const errMsg = err.response?.data?.error?.message ?? err.message;
+      console.error(`[FLOW 4] ❌ Chunk ${i} failed:`, errMsg);
+      console.error(`[FLOW 4] Failed chunk details: ${chunk.length} users, IDs: ${chunk.map(u => u.id).join(', ')}`);
     }
   }
 
-  console.log("[FLOW 4] ✅ Batch user assignment complete");
+  console.log(`[FLOW 4] ✅ Batch user assignment complete — success: ${successCount}, failed: ${failCount}, total: ${usersToAdd.length}`);
 };
 
 // ─── Flow 5: Assign Groups to App Roles on Tenant's Enterprise SP ─────────────
