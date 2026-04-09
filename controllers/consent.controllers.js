@@ -472,11 +472,10 @@ const flow5_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId,
 const flow6_persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId) => {
   console.log(`[FLOW 6] Persisting group IDs to DB for tenantUuid=${tenantUuid}...`);
 
-  await client.query(`SELECT public.tenant_update_groups($1, $2, $3)`, [
-    tenantUuid,
-    adminGroupId,
-    usersGroupId,
-  ]);
+  await client.query(
+    `SELECT public.tenant_update_groups($1::uuid, $2::text, $3::text)`,
+    [tenantUuid, adminGroupId, usersGroupId]
+  );
 
   console.log(`[FLOW 6] ✅ Persisted — adminGroupId: ${adminGroupId}, usersGroupId: ${usersGroupId}`);
 };
