@@ -151,12 +151,12 @@ const step3_grantGraphPermissions = async (token) => {
 };
 
 // ─── Step 4: Update Tenant in DB ──────────────────────────────────────────────
-// Sets isconsented=true without overwriting tenantname/tenantemail.
-// Those fields are already correctly populated during check_ConsentStatus from JWT claims.
-// Graph data (if available) was just for validation — we don't need to update the DB again.
+// Fetches the current tenant row, merges with real Graph/Dynamics data,
+// sets isconsented=true, and calls tenant_update in a single atomic operation.
+// Replaces both the old step4_updateDbConsentFlag and step4a org patch.
 
-const step4_updateTenantRecord = async (tenant) => {
-  console.log("[STEP 4] Updating consent flag in DB...");
+const step4_updateTenantRecord = async (tenant, tenantName, tenantEmail, dynamicsAccountId) => {
+  console.log("[STEP 4] Fetching current tenant row for full update...");
 
   const currentRes = await client.query(
     `SELECT * FROM public.tenant_get_map_with_entratenantid() WHERE entratenantid = $1`,
@@ -170,24 +170,34 @@ const step4_updateTenantRecord = async (tenant) => {
 
   console.log(`[STEP 4] Current row — tenantuuid=${current.tenantuuid} | name=${current.tenantname}`);
 
-  // Only update isconsented flag — preserve all other fields as-is
+  // Merge: prefer real Graph data, but ALWAYS fallback to existing DB value to prevent null constraint violations
+  const finalTenantName = tenantName || current.tenantname;
+  const finalTenantEmail = tenantEmail || current.tenantemail;
+  const finalDynamicsAccountId = dynamicsAccountId || current.dynamicsaccountid;
+
+  if (!finalTenantName) {
+    throw new Error(`Cannot update tenant — tenantname is null in both Graph and DB for tenant=${tenant}`);
+  }
+
   await client.query(
     `SELECT public.tenant_update($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       current.tenantuuid,
       tenant,
-      current.tenantname,
-      current.tenantemail,
-      current.dynamicsaccountid,
+      finalTenantName,
+      finalTenantEmail,
+      finalDynamicsAccountId,
       current.admingroupid,
       current.usergroupid,
       current.isactive ?? true,
-      true,                      // isconsented — THE point of this callback
+      true,
       current.isapproved ?? false,
     ],
   );
 
-  console.log(`[STEP 4] ✅ Tenant consent flag updated — isconsented=true`);
+  console.log(
+    `[STEP 4] ✅ Tenant updated — isconsented=true | name=${finalTenantName} | email=${finalTenantEmail}`,
+  );
 
   return current.tenantuuid;
 };
@@ -269,31 +279,38 @@ const flow2_ensureGroups = async (headers) => {
 const flow3_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersGroupId) => {
   console.log(`[FLOW 3] Assigning admin ${adminOid} to both groups...`);
 
-  // Add delay to allow group creation to propagate
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  const addToGroup = async (groupId) => {
+    try {
+      const checkRes = await axios.get(
+        `${GRAPH_URL}/groups/${groupId}/members?$filter=id eq '${adminOid}'&$select=id`,
+        { headers, timeout: 10000 },
+      );
+      if (checkRes.data.value?.length > 0) {
+        console.log(`[FLOW 3] Admin already a member of group ${groupId}`);
+        return;
+      }
+    } catch (e) {
+      console.warn(`[FLOW 3] Member check skipped for group ${groupId}, attempting add:`, e.message);
+    }
 
-  const addToGroup = async (groupId, groupName) => {
     try {
       await axios.post(
         `${GRAPH_URL}/groups/${groupId}/members/$ref`,
         { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
         { headers, timeout: 10000 },
       );
-      console.log(`[FLOW 3] Added admin ${adminOid} to ${groupName}`);
+      console.log(`[FLOW 3] Added admin ${adminOid} to group ${groupId}`);
     } catch (err) {
       const msg = err.response?.data?.error?.message ?? err.message;
       if (err.response?.status === 400 && msg?.toLowerCase().includes("already exist")) {
-        console.log(`[FLOW 3] Admin already in ${groupName} (conflict ignored)`);
+        console.log(`[FLOW 3] Admin already in group ${groupId} (conflict ignored)`);
       } else {
-        console.warn(`[FLOW 3] Failed to add admin to ${groupName}:`, msg);
+        console.warn(`[FLOW 3] Failed to add admin to group ${groupId}:`, msg);
       }
     }
   };
 
-  await Promise.allSettled([
-    addToGroup(adminGroupId, "PowerIntake.Admin"),
-    addToGroup(usersGroupId, "PowerIntake.Users")
-  ]);
+  await Promise.allSettled([addToGroup(adminGroupId), addToGroup(usersGroupId)]);
   console.log("[FLOW 3] ✅ Admin assignment complete");
 };
 
@@ -472,14 +489,8 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
   try {
     const enterpriseSp = await flow1_resolveEnterpriseSp(headers);
     const { adminGroupId, usersGroupId } = await flow2_ensureGroups(headers);
-    
     await flow3_assignAdminToGroups(headers, adminOid, adminGroupId, usersGroupId);
-    
-    // Flow 4 is non-critical - don't let it block Flow 5 and 6
-    flow4_batchAssignUsersToGroup(headers, usersGroupId)
-      .then(() => console.log("[POST-CONSENT] Flow 4 completed"))
-      .catch(err => console.warn("[POST-CONSENT] Flow 4 failed (non-fatal):", err.message));
-    
+    await flow4_batchAssignUsersToGroup(headers, usersGroupId);
     await flow5_assignGroupsToAppRoles(headers, adminGroupId, usersGroupId, enterpriseSp.id);
 
     if (tenantUuid) {
@@ -535,11 +546,9 @@ const consent_Callback = async (req, res) => {
     const token   = await step1_acquireToken(tenant);
     const headers = makeHeaders(token);
 
-    // Step 2 — Graph org info + Dynamics in parallel (for logging/validation only)
+    // Step 2 — Graph org info + Dynamics in parallel (both non-fatal)
     const { tenantName, tenantDomain, tenantEmail, dynamicsAccountId } =
       await step2_fetchOrgAndDynamics(token, tenant);
-
-    console.log(`[CONSENT] Graph validation — name=${tenantName}, email=${tenantEmail}, dynamics=${dynamicsAccountId}`);
 
     // Step 3 — Auto-grant Graph app permissions (non-fatal)
     try {
@@ -548,8 +557,9 @@ const consent_Callback = async (req, res) => {
       console.warn("[CONSENT] Step 3 ⚠️ Could not auto-grant Graph permissions:", grantErr.message);
     }
 
-    // Step 4 — Update isconsented flag only (tenant data already correct from check_ConsentStatus)
-    const tenantUuid = await step4_updateTenantRecord(tenant);
+    // Step 4 — Single atomic DB update: isconsented=true + real org info from Graph
+    // Returns tenantuuid so we don't need a separate round-trip
+    const tenantUuid = await step4_updateTenantRecord(tenant, tenantName, tenantEmail, dynamicsAccountId);
 
     // ── Respond immediately — don't block the browser on background provisioning
     console.log("[CONSENT] ✅ Responding with consent=success — firing background provisioning");
