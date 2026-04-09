@@ -170,28 +170,35 @@ const step4_updateTenantRecord = async (tenant, tenantName, tenantEmail, dynamic
 
   console.log(`[STEP 4] Current row — tenantuuid=${current.tenantuuid} | name=${current.tenantname}`);
 
-  // Merge: prefer real Graph data over the JWT-claim placeholder set during check_ConsentStatus
+  // Merge: prefer real Graph data, but ALWAYS fallback to existing DB value to prevent null constraint violations
+  const finalTenantName = tenantName || current.tenantname;
+  const finalTenantEmail = tenantEmail || current.tenantemail;
+  const finalDynamicsAccountId = dynamicsAccountId || current.dynamicsaccountid;
+
+  if (!finalTenantName) {
+    throw new Error(`Cannot update tenant — tenantname is null in both Graph and DB for tenant=${tenant}`);
+  }
+
   await client.query(
     `SELECT public.tenant_update($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
-      current.tenantuuid,                              // p_tenantuuid
-      tenant,                                           // p_entratenantid
-      tenantName        ?? current.tenantname,          // p_tenantname      — real org name from Graph
-      tenantEmail       ?? current.tenantemail,         // p_tenantemail     — real org email from Graph
-      dynamicsAccountId ?? current.dynamicsaccountid,   // p_dynamicsaccountid
-      current.admingroupid,                             // p_admingroupid    — preserve (set by flow6 later)
-      current.usergroupid,                              // p_usergroupid     — preserve (set by flow6 later)
-      current.isactive  ?? true,                        // p_isactive        — preserve
-      true,                                             // p_isconsented     — THE point of this callback
-      current.isapproved ?? false,                      // p_isapproved      — preserve
+      current.tenantuuid,
+      tenant,
+      finalTenantName,
+      finalTenantEmail,
+      finalDynamicsAccountId,
+      current.admingroupid,
+      current.usergroupid,
+      current.isactive ?? true,
+      true,
+      current.isapproved ?? false,
     ],
   );
 
   console.log(
-    `[STEP 4] ✅ Tenant updated — isconsented=true | name=${tenantName ?? current.tenantname} | email=${tenantEmail ?? current.tenantemail}`,
+    `[STEP 4] ✅ Tenant updated — isconsented=true | name=${finalTenantName} | email=${finalTenantEmail}`,
   );
 
-  // Return tenantuuid so the caller doesn't need a second DB round-trip
   return current.tenantuuid;
 };
 
@@ -560,7 +567,10 @@ const consent_Callback = async (req, res) => {
     res.json({ redirectUrl: "/consent-callback?consent=success" });
 
     // ── Fire-and-forget: groups, user assignment, app role assignment
-    runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
+    // Wait briefly to ensure consent is fully propagated before provisioning
+    setTimeout(() => {
+      runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
+    }, 2000);
 
   } catch (err) {
     console.error("[CONSENT] ❌ Unhandled exception:", err.message);
