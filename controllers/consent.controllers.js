@@ -23,27 +23,6 @@ const makeHeaders = (token) => ({
   "Content-Type": "application/json",
 });
 
-// Retry a Graph call with exponential backoff.
-// Retries on 404 (directory propagation lag) and 429 (throttling).
-const withRetry = async (label, fn, { retries = 5, delayMs = 3000 } = {}) => {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      const status = err.response?.status;
-      const isRetryable = status === 404 || status === 429;
-
-      if (!isRetryable || attempt === retries) throw err;
-
-      const wait = delayMs * attempt;
-      console.warn(
-        `[RETRY] ${label} — attempt ${attempt}/${retries} failed (HTTP ${status}), retrying in ${wait}ms...`,
-      );
-      await new Promise((r) => setTimeout(r, wait));
-    }
-  }
-};
-
 // ─── Step 1: Acquire Token ────────────────────────────────────────────────────
 
 const step1_acquireToken = async (tenant) => {
@@ -134,7 +113,8 @@ const step3_grantGraphPermissions = async (token) => {
     { headers },
   );
   const existingRoleIds = new Set(existingRes.data.value.map((a) => a.appRoleId));
-  const rolesToGrant    = REQUIRED_GRAPH_ROLES.filter((roleId) => !existingRoleIds.has(roleId));
+
+  const rolesToGrant = REQUIRED_GRAPH_ROLES.filter((roleId) => !existingRoleIds.has(roleId));
 
   const results = await Promise.allSettled(
     rolesToGrant.map((appRoleId) =>
@@ -163,6 +143,8 @@ const step3_grantGraphPermissions = async (token) => {
 };
 
 // ─── Step 4: Mark Tenant as Consented ────────────────────────────────────────
+// Uses tenant_update_isconsented(entratenantid, true) — a focused, atomic update
+// that only flips the isconsented flag without touching any other tenant fields.
 
 const step4_markTenantConsented = async (tenant) => {
   console.log(`[STEP 4] Marking tenant as consented — entratenantid=${tenant}...`);
@@ -175,6 +157,7 @@ const step4_markTenantConsented = async (tenant) => {
   const row = result.rows[0];
   console.log(`[STEP 4] ✅ DB response — updated=${row?.updated} | message=${row?.message}`);
 
+  // Fetch tenantuuid separately so the background flow can use it for group persistence
   const tenantRes = await client.query(
     `SELECT tenantuuid FROM public.tenant WHERE entratenantid = $1`,
     [tenant],
@@ -213,8 +196,10 @@ const flow1_resolveEnterpriseSp = async (headers) => {
 };
 
 // ─── Flow 2: Ensure Groups Exist ─────────────────────────────────────────────
-// After creating a group, waits 5s for Microsoft's directory to propagate it
-// before any subsequent flow tries to read or write members/roles.
+// Creates PowerIntake.Admin and PowerIntake.Users if they don't already exist.
+// Returns the group IDs — these are stored on named variables and threaded
+// through the rest of the provisioning flow so every subsequent step uses the
+// same resolved IDs rather than making additional lookups.
 
 const flow2_ensureGroups = async (headers) => {
   console.log("[FLOW 2] Ensuring PowerIntake groups exist...");
@@ -243,58 +228,64 @@ const flow2_ensureGroups = async (headers) => {
     return res.data;
   };
 
+  // ── PowerIntake.Admin ──────────────────────────────────────────────────────
   let adminGroup = await findGroup("PowerIntake.Admin");
   if (adminGroup) {
     console.log(`[FLOW 2] Group already exists: PowerIntake.Admin → ${adminGroup.id}`);
   } else {
     adminGroup = await createGroup("PowerIntake.Admin");
   }
+  // Store the resolved admin group ID on a named variable for downstream flows
   const adminGroupId = adminGroup.id;
 
+  // ── PowerIntake.Users ──────────────────────────────────────────────────────
   let usersGroup = await findGroup("PowerIntake.Users");
   if (usersGroup) {
     console.log(`[FLOW 2] Group already exists: PowerIntake.Users → ${usersGroup.id}`);
   } else {
     usersGroup = await createGroup("PowerIntake.Users");
   }
+  // Store the resolved users group ID on a named variable for downstream flows
   const usersGroupId = usersGroup.id;
 
   console.log(`[FLOW 2] ✅ Groups ensured — adminGroupId=${adminGroupId} | usersGroupId=${usersGroupId}`);
 
-  // Allow time for Microsoft's directory to propagate newly created groups.
-  // Without this, Flow 3 member adds and Flow 4 member reads return 404.
-  console.log("[FLOW 2] ⏳ Waiting 5s for directory propagation before proceeding...");
-  await new Promise((r) => setTimeout(r, 5000));
-
+  // Return both IDs so the orchestrator can pass them to all subsequent flows
   return { adminGroupId, usersGroupId };
 };
 
 // ─── Flow 3: Assign Global Admin to Both Groups ───────────────────────────────
-// FIX: Removed the pre-check GET /members?$filter=id eq '...' — this endpoint
-// is unsupported on freshly created groups and returns 404 regardless of state.
-// Instead: attempt the add directly; treat HTTP 400 "already exists" as success.
 
 const flow3_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersGroupId) => {
   console.log(`[FLOW 3] Assigning admin ${adminOid} to both groups...`);
 
   const addToGroup = async (groupId) => {
     try {
-      await withRetry(`addMember group=${groupId}`, () =>
-        axios.post(
-          `${GRAPH_URL}/groups/${groupId}/members/$ref`,
-          { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
-          { headers, timeout: 10000 },
-        ),
+      const checkRes = await axios.get(
+        `${GRAPH_URL}/groups/${groupId}/members?$filter=id eq '${adminOid}'&$select=id`,
+        { headers, timeout: 10000 },
       );
-      console.log(`[FLOW 3] ✅ Added admin ${adminOid} to group ${groupId}`);
-    } catch (err) {
-      const status = err.response?.status;
-      const msg    = err.response?.data?.error?.message ?? err.message;
+      if (checkRes.data.value?.length > 0) {
+        console.log(`[FLOW 3] Admin already a member of group ${groupId}`);
+        return;
+      }
+    } catch (e) {
+      console.warn(`[FLOW 3] Member check skipped for group ${groupId}, attempting add:`, e.message);
+    }
 
-      if (status === 400 && msg?.toLowerCase().includes("already exist")) {
+    try {
+      await axios.post(
+        `${GRAPH_URL}/groups/${groupId}/members/$ref`,
+        { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
+        { headers, timeout: 10000 },
+      );
+      console.log(`[FLOW 3] Added admin ${adminOid} to group ${groupId}`);
+    } catch (err) {
+      const msg = err.response?.data?.error?.message ?? err.message;
+      if (err.response?.status === 400 && msg?.toLowerCase().includes("already exist")) {
         console.log(`[FLOW 3] Admin already in group ${groupId} (conflict ignored)`);
       } else {
-        console.warn(`[FLOW 3] ⚠️ Failed to add admin to group ${groupId}: ${msg}`);
+        console.warn(`[FLOW 3] Failed to add admin to group ${groupId}:`, msg);
       }
     }
   };
@@ -304,8 +295,6 @@ const flow3_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersG
 };
 
 // ─── Flow 4: Batch Assign Active Tenant Users to PowerIntake.Users ────────────
-// FIX: The existing-members fetch now goes through withRetry so that transient
-// 404s caused by directory propagation lag are retried automatically.
 
 const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
   console.log("[FLOW 4] Batch assigning active tenant users to PowerIntake.Users...");
@@ -315,7 +304,7 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
 
     try {
       console.log("[FLOW 4] Strategy 1 — Fetching active users (standard query)...");
-      let users    = [];
+      let users = [];
       let nextLink = simpleUrl;
       while (nextLink) {
         const { data } = await axios.get(nextLink, { headers, timeout: 15000 });
@@ -338,9 +327,9 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
     try {
       console.log("[FLOW 4] Strategy 2 — Fetching active users (advanced query mode)...");
       const advancedHeaders = { ...headers, "ConsistencyLevel": "eventual" };
-      const advancedUrl     = `${GRAPH_URL}/users?$filter=accountEnabled eq true&$select=id&$top=999&$count=true`;
+      const advancedUrl = `${GRAPH_URL}/users?$filter=accountEnabled eq true&$select=id&$top=999&$count=true`;
 
-      let users    = [];
+      let users = [];
       let nextLink = advancedUrl;
       while (nextLink) {
         const { data } = await axios.get(nextLink, { headers: advancedHeaders, timeout: 15000 });
@@ -350,23 +339,19 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
       console.log(`[FLOW 4] Strategy 2 ✅ Fetched ${users.length} active users`);
       return { users, filtered: true };
     } catch (err) {
-      console.warn(
-        `[FLOW 4] Strategy 2 ⚠️ Advanced query also failed: ${err.response?.data?.error?.message ?? err.message}`,
-      );
+      console.warn(`[FLOW 4] Strategy 2 ⚠️ Advanced query also failed: ${err.response?.data?.error?.message ?? err.message}`);
       console.warn("[FLOW 4] Strategy 3 — Falling back to fetching all users unfiltered...");
     }
 
     const fallbackUrl = `${GRAPH_URL}/users?$select=id&$top=999`;
-    let users    = [];
+    let users = [];
     let nextLink = fallbackUrl;
     while (nextLink) {
       const { data } = await axios.get(nextLink, { headers, timeout: 15000 });
       users.push(...data.value);
       nextLink = data["@odata.nextLink"] ?? null;
     }
-    console.log(
-      `[FLOW 4] Strategy 3 ✅ Fetched ${users.length} users (unfiltered — includes disabled accounts)`,
-    );
+    console.log(`[FLOW 4] Strategy 3 ✅ Fetched ${users.length} users (unfiltered — includes disabled accounts)`);
     return { users, filtered: false };
   };
 
@@ -381,19 +366,13 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
     return;
   }
 
-  // Fetch existing members with retry — newly created groups may return 404
-  // for a few seconds after creation even though the 5s delay in Flow 2
-  // covers most cases.
   const existingMemberIds = new Set();
-  await withRetry(`fetch existing members for group=${usersGroupId}`, async () => {
-    existingMemberIds.clear();
-    let membersLink = `${GRAPH_URL}/groups/${usersGroupId}/members?$select=id&$top=999`;
-    while (membersLink) {
-      const { data } = await axios.get(membersLink, { headers, timeout: 15000 });
-      data.value.forEach((m) => existingMemberIds.add(m.id));
-      membersLink = data["@odata.nextLink"] ?? null;
-    }
-  });
+  let membersLink = `${GRAPH_URL}/groups/${usersGroupId}/members?$select=id&$top=999`;
+  while (membersLink) {
+    const { data } = await axios.get(membersLink, { headers, timeout: 15000 });
+    data.value.forEach((m) => existingMemberIds.add(m.id));
+    membersLink = data["@odata.nextLink"] ?? null;
+  }
 
   const usersToAdd = allUsers.filter((u) => !existingMemberIds.has(u.id));
 
@@ -410,21 +389,16 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
     const rangeEnd = Math.min(i + chunkSize, usersToAdd.length);
 
     try {
-      await withRetry(`add users chunk ${i + 1}–${rangeEnd}`, () =>
-        axios.patch(
-          `${GRAPH_URL}/groups/${usersGroupId}`,
-          {
-            "members@odata.bind": chunk.map((u) => `${GRAPH_URL}/directoryObjects/${u.id}`),
-          },
-          { headers, timeout: 15000 },
-        ),
+      await axios.patch(
+        `${GRAPH_URL}/groups/${usersGroupId}`,
+        {
+          "members@odata.bind": chunk.map((u) => `${GRAPH_URL}/directoryObjects/${u.id}`),
+        },
+        { headers, timeout: 15000 },
       );
       console.log(`[FLOW 4] Users chunk added: ${i + 1}–${rangeEnd} of ${usersToAdd.length}`);
     } catch (err) {
-      console.warn(
-        `[FLOW 4] ⚠️ Chunk ${i + 1}–${rangeEnd} failed after retries:`,
-        err.response?.data?.error?.message ?? err.message,
-      );
+      console.warn(`[FLOW 4] Chunk ${i} failed:`, err.response?.data?.error?.message ?? err.message);
     }
   }
 
@@ -432,6 +406,7 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
 };
 
 // ─── Flow 5: Assign Groups to App Roles on Tenant's Enterprise SP ─────────────
+// Uses the adminGroupId and usersGroupId resolved in Flow 2 — no extra lookups.
 
 const flow5_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId, enterpriseSpId) => {
   console.log(`[FLOW 5] Assigning groups to app roles on enterprise SP ${enterpriseSpId}...`);
@@ -467,6 +442,8 @@ const flow5_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId,
 };
 
 // ─── Flow 6: Persist Group IDs to DB ─────────────────────────────────────────
+// Receives the same adminGroupId and usersGroupId variables resolved in Flow 2.
+// Uses tenant_update_groups(tenantuuid, admingroupid, usergroupid).
 
 const flow6_persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId) => {
   console.log(`[FLOW 6] Persisting group IDs to DB for tenantUuid=${tenantUuid}...`);
@@ -482,19 +459,32 @@ const flow6_persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId)
 };
 
 // ─── Background Provisioning Orchestrator ────────────────────────────────────
+// Flow 2 resolves (or creates) both groups and returns their IDs as named variables.
+// Those same variables — adminGroupId and usersGroupId — are passed directly into
+// every subsequent flow so there is no duplication of group lookups and no risk
+// of a mismatch between the group used in one step and persisted in another.
 
 const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
   console.log("[POST-CONSENT] ── Starting background provisioning ────────────");
   const headers = makeHeaders(token);
 
   try {
-    const enterpriseSp                   = await flow1_resolveEnterpriseSp(headers);
+    // Flow 1 — Resolve the enterprise SP (needed by Flow 5 for app role assignment)
+    const enterpriseSp = await flow1_resolveEnterpriseSp(headers);
+
+    // Flow 2 — Create or retrieve groups; capture IDs into named variables
     const { adminGroupId, usersGroupId } = await flow2_ensureGroups(headers);
 
+    // Flow 3 — Assign global admin to both groups using the resolved IDs
     await flow3_assignAdminToGroups(headers, adminOid, adminGroupId, usersGroupId);
+
+    // Flow 4 — Batch assign all tenant users to PowerIntake.Users
     await flow4_batchAssignUsersToGroup(headers, usersGroupId);
+
+    // Flow 5 — Assign both groups to their app roles on the enterprise SP
     await flow5_assignGroupsToAppRoles(headers, adminGroupId, usersGroupId, enterpriseSp.id);
 
+    // Flow 6 — Persist the same group IDs to the DB (tenant_update_groups)
     if (tenantUuid) {
       await flow6_persistGroupIdsToDb(tenantUuid, adminGroupId, usersGroupId);
     } else {
@@ -509,6 +499,13 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
 };
 
 // ─── Consent Callback (Main Entry Point) ─────────────────────────────────────
+// Sequence:
+//   Step 1 — Acquire app-only token (client_credentials, valid post-consent)
+//   Step 2 — Fetch real org info (Graph) + Dynamics accountid IN PARALLEL
+//   Step 3 — Auto-grant Graph app permissions (non-fatal)
+//   Step 4 — Flip isconsented=true via tenant_update_isconsented; resolve tenantuuid
+//   → Respond immediately with consent=success
+//   → Fire-and-forget: run group provisioning in background (Flows 1–6)
 
 const consent_Callback = async (req, res) => {
   const { tenant, admin_consent, error } = req.query;
@@ -518,6 +515,7 @@ const consent_Callback = async (req, res) => {
   console.log(`[CONSENT] tenant=${tenant} | admin_consent=${admin_consent} | error=${error ?? "none"}`);
   console.log(`[CONSENT] adminOid=${adminOid ?? "MISSING"}`);
 
+  // ── Guards ───────────────────────────────────────────────────────────────────
   if (error || admin_consent !== "True") {
     console.warn("[CONSENT] ❌ Failed or cancelled by Microsoft");
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
@@ -532,22 +530,30 @@ const consent_Callback = async (req, res) => {
   }
 
   try {
+    // Step 1 — Acquire app-only token for the consenting tenant
     const token = await step1_acquireToken(tenant);
 
+    // Step 2 — Graph org info + Dynamics in parallel (both non-fatal)
     const { tenantName, tenantDomain, tenantEmail, dynamicsAccountId } =
       await step2_fetchOrgAndDynamics(token, tenant);
 
+    // Step 3 — Auto-grant Graph app permissions (non-fatal)
     try {
       await step3_grantGraphPermissions(token);
     } catch (grantErr) {
       console.warn("[CONSENT] Step 3 ⚠️ Could not auto-grant Graph permissions:", grantErr.message);
     }
 
+    // Step 4 — Flip isconsented=true using the focused DB function;
+    //          also resolves tenantuuid for group persistence in Flow 6
     const tenantUuid = await step4_markTenantConsented(tenant);
 
+    // ── Respond immediately — don't block the browser on background provisioning
     console.log("[CONSENT] ✅ Responding with consent=success — firing background provisioning");
     res.json({ redirectUrl: "/consent-callback?consent=success" });
 
+    // ── Fire-and-forget: groups, user assignment, app role assignment, DB persist
+    // Brief delay ensures consent is fully propagated in Microsoft's directory
     setTimeout(() => {
       runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
     }, 2000);
