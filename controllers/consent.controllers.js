@@ -35,20 +35,18 @@ const step1_acquireToken = async (tenant) => {
 };
 
 // ─── Step 2: Fetch Org Info + Dynamics in Parallel ───────────────────────────
-// Both calls are independent — run them together to save time.
-// Both are non-fatal: if either fails we log a warning and continue with nulls.
+// Uses the admin's delegated token (from req) instead of app-only token.
+// This avoids the 403 error when Organization.Read.All hasn't been granted yet.
 
-const step2_fetchOrgAndDynamics = async (token, tenant) => {
+const step2_fetchOrgAndDynamics = async (adminToken, tenant) => {
   console.log("[STEP 2] Fetching org info (Graph) + Dynamics accountid in parallel...");
-  const headers = makeHeaders(token);
+  const headers = { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" };
 
   const [orgResult, dynamicsResult] = await Promise.allSettled([
-    // Graph: get real org display name, email, verified domains
+    // Graph: get real org display name and email using admin's delegated token
     axios.get(`${GRAPH_URL}/organization`, {
       headers,
-      params: {
-        $select: "id,displayName,verifiedDomains,technicalNotificationMails",
-      },
+      params: { $select: "displayName,technicalNotificationMails" },
       timeout: 10000,
     }),
 
@@ -71,15 +69,13 @@ const step2_fetchOrgAndDynamics = async (token, tenant) => {
   ]);
 
   // Graph result
-  let tenantName         = null;
-  let tenantDomain       = null;
-  let tenantEmail        = null;
+  let tenantName  = null;
+  let tenantEmail = null;
   if (orgResult.status === "fulfilled") {
-    const org    = orgResult.value.data.value?.[0];
-    tenantName   = org?.displayName ?? null;
-    tenantDomain = org?.verifiedDomains?.find((d) => d.isDefault)?.name ?? null;
-    tenantEmail  = org?.technicalNotificationMails?.[0] ?? null;
-    console.log(`[STEP 2] ✅ Graph — org=${tenantName} | domain=${tenantDomain} | email=${tenantEmail}`);
+    const org   = orgResult.value.data.value?.[0];
+    tenantName  = org?.displayName ?? null;
+    tenantEmail = org?.technicalNotificationMails?.[0] ?? null;
+    console.log(`[STEP 2] ✅ Graph — org=${tenantName} | email=${tenantEmail}`);
   } else {
     console.warn(`[STEP 2] ⚠️ Graph org fetch failed (non-fatal): ${orgResult.reason?.message}`);
   }
@@ -93,7 +89,7 @@ const step2_fetchOrgAndDynamics = async (token, tenant) => {
     console.warn(`[STEP 2] ⚠️ Dynamics lookup failed (non-fatal): ${dynamicsResult.reason?.message}`);
   }
 
-  return { tenantName, tenantDomain, tenantEmail, dynamicsAccountId };
+  return { tenantName, tenantEmail, dynamicsAccountId };
 };
 
 // ─── Step 3: Grant Graph App Permissions ─────────────────────────────────────
@@ -170,14 +166,17 @@ const step4_updateTenantRecord = async (tenant, tenantName, tenantEmail, dynamic
 
   console.log(`[STEP 4] Current row — tenantuuid=${current.tenantuuid} | name=${current.tenantname}`);
 
-  // Merge: prefer real Graph data over the JWT-claim placeholder set during check_ConsentStatus
+  // Merge: prefer real Graph data, fallback to current DB value, ultimate fallback to tenant ID
+  const finalTenantName = tenantName || current.tenantname || `Tenant-${tenant.substring(0, 8)}`;
+  const finalTenantEmail = tenantEmail || current.tenantemail || null;
+
   await client.query(
     `SELECT public.tenant_update($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       current.tenantuuid,                              // p_tenantuuid
       tenant,                                           // p_entratenantid
-      tenantName        ?? current.tenantname,          // p_tenantname      — real org name from Graph
-      tenantEmail       ?? current.tenantemail,         // p_tenantemail     — real org email from Graph
+      finalTenantName,                                  // p_tenantname      — guaranteed non-null
+      finalTenantEmail,                                 // p_tenantemail
       dynamicsAccountId ?? current.dynamicsaccountid,   // p_dynamicsaccountid
       current.admingroupid,                             // p_admingroupid    — preserve (set by flow6 later)
       current.usergroupid,                              // p_usergroupid     — preserve (set by flow6 later)
@@ -188,10 +187,9 @@ const step4_updateTenantRecord = async (tenant, tenantName, tenantEmail, dynamic
   );
 
   console.log(
-    `[STEP 4] ✅ Tenant updated — isconsented=true | name=${tenantName ?? current.tenantname} | email=${tenantEmail ?? current.tenantemail}`,
+    `[STEP 4] ✅ Tenant updated — isconsented=true | name=${finalTenantName} | email=${finalTenantEmail ?? 'none'}`,
   );
 
-  // Return tenantuuid so the caller doesn't need a second DB round-trip
   return current.tenantuuid;
 };
 
@@ -516,6 +514,7 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
 const consent_Callback = async (req, res) => {
   const { tenant, admin_consent, error } = req.query;
   const adminOid = req.user?.oid || req.user?.sub;
+  const adminToken = req.headers["authorization"]?.split(" ")[1];
 
   console.log("[CONSENT] ── Callback received ──────────────────────────────");
   console.log(`[CONSENT] tenant=${tenant} | admin_consent=${admin_consent} | error=${error ?? "none"}`);
@@ -534,15 +533,18 @@ const consent_Callback = async (req, res) => {
     console.error("[CONSENT] ❌ Missing adminOid — validateToken may have failed");
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
+  if (!adminToken) {
+    console.error("[CONSENT] ❌ Missing admin token");
+    return res.json({ redirectUrl: "/consent-callback?consent=failed" });
+  }
 
   try {
     // Step 1 — Acquire app-only token for the consenting tenant
-    const token   = await step1_acquireToken(tenant);
-    const headers = makeHeaders(token);
+    const token = await step1_acquireToken(tenant);
 
-    // Step 2 — Graph org info + Dynamics in parallel (both non-fatal)
-    const { tenantName, tenantDomain, tenantEmail, dynamicsAccountId } =
-      await step2_fetchOrgAndDynamics(token, tenant);
+    // Step 2 — Graph org info (using admin's delegated token) + Dynamics in parallel
+    const { tenantName, tenantEmail, dynamicsAccountId } =
+      await step2_fetchOrgAndDynamics(adminToken, tenant);
 
     // Step 3 — Auto-grant Graph app permissions (non-fatal)
     try {
@@ -554,13 +556,16 @@ const consent_Callback = async (req, res) => {
     // Step 4 — Single atomic DB update: isconsented=true + real org info from Graph
     // Returns tenantuuid so we don't need a separate round-trip
     const tenantUuid = await step4_updateTenantRecord(tenant, tenantName, tenantEmail, dynamicsAccountId);
+    console.log("[CONSENT] ✅ Database update confirmed — proceeding with provisioning");
 
     // ── Respond immediately — don't block the browser on background provisioning
-    console.log("[CONSENT] ✅ Responding with consent=success — firing background provisioning");
     res.json({ redirectUrl: "/consent-callback?consent=success" });
 
-    // ── Fire-and-forget: groups, user assignment, app role assignment
-    runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
+    // ── Fire-and-forget: Post-consent provisioning (Flows 1-6)
+    // Executes ONLY after database update is confirmed
+    runPostConsentFlow({ token, tenant, adminOid, tenantUuid }).catch(err => {
+      console.error("[CONSENT] ❌ Background provisioning failed:", err.message);
+    });
 
   } catch (err) {
     console.error("[CONSENT] ❌ Unhandled exception:", err.message);
