@@ -261,6 +261,19 @@ const flow3_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersG
 
   const addToGroup = async (groupId) => {
     try {
+      const checkRes = await axios.get(
+        `${GRAPH_URL}/groups/${groupId}/members?$filter=id eq '${adminOid}'&$select=id`,
+        { headers, timeout: 10000 },
+      );
+      if (checkRes.data.value?.length > 0) {
+        console.log(`[FLOW 3] Admin already a member of group ${groupId}`);
+        return;
+      }
+    } catch (e) {
+      console.warn(`[FLOW 3] Member check skipped for group ${groupId}, attempting add:`, e.message);
+    }
+
+    try {
       await axios.post(
         `${GRAPH_URL}/groups/${groupId}/members/$ref`,
         { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
@@ -355,25 +368,8 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
 
   const existingMemberIds = new Set();
   let membersLink = `${GRAPH_URL}/groups/${usersGroupId}/members?$select=id&$top=999`;
-  
-  const fetchWithRetry = async (url, maxRetries = 5) => {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        return await axios.get(url, { headers, timeout: 15000 });
-      } catch (err) {
-        if (err.response?.status === 404 && attempt < maxRetries) {
-          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
-          console.warn(`[FLOW 4] Members fetch 404 (attempt ${attempt}/${maxRetries}), retrying in ${delay}ms...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        } else {
-          throw err;
-        }
-      }
-    }
-  };
-  
   while (membersLink) {
-    const { data } = await fetchWithRetry(membersLink);
+    const { data } = await axios.get(membersLink, { headers, timeout: 15000 });
     data.value.forEach((m) => existingMemberIds.add(m.id));
     membersLink = data["@odata.nextLink"] ?? null;
   }
