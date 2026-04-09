@@ -379,8 +379,20 @@ const flow6_persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId)
   console.log(`[FLOW 6] ✅ Persisted — adminGroupId: ${adminGroupId}, usersGroupId: ${usersGroupId}`);
 };
 
-const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
+const runPostConsentFlow = async ({ tenant, adminOid, tenantUuid }) => {
   console.log("[POST-CONSENT] ── Starting background provisioning ────────────");
+
+  // Re-acquire a fresh token — the consent is now fully propagated
+  // and permissions may have settled since the callback token was issued.
+  let token;
+  try {
+    token = await getAccessToken(tenant);
+    console.log("[POST-CONSENT] ✅ Fresh token acquired for background provisioning");
+  } catch (err) {
+    console.error("[POST-CONSENT] ❌ Failed to acquire fresh token:", err.message);
+    return;
+  }
+
   const headers = makeHeaders(token);
 
   try {
@@ -447,9 +459,9 @@ const consent_Callback = async (req, res) => {
     console.log("[CONSENT] ✅ Responding with consent=success — firing background provisioning");
     res.json({ redirectUrl: "/consent-callback?consent=success" });
 
-    // Fire-and-forget: group provisioning
+// Fire-and-forget: group provisioning
     setTimeout(() => {
-      runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
+      runPostConsentFlow({ tenant, adminOid, tenantUuid });
     }, 2000);
 
   } catch (err) {
