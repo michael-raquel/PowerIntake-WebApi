@@ -1,10 +1,10 @@
 const client = require("../config/db");
 const axios = require("axios");
 const { getAccessToken } = require("../config/authService");
-const { getDynamicsToken } = require('../utils/dynamicsToken');
+const { getDynamicsToken } = require("../utils/dynamicsToken");
 
 const GRAPH_URL = "https://graph.microsoft.com/v1.0";
-
+const AZURE_CLIENT_ID = "6ccf8b01-7af5-497b-9e23-45a92d68a226";
 const create_Tenant = async (req, res) => {
   try {
     const {
@@ -94,7 +94,7 @@ const update_Tenant = async (req, res) => {
         parseBool(isactive, "isactive"),
         parseBool(isconsented, "isconsented"),
         parseBool(isapproved, "isapproved"), // ✅ added
-      ]
+      ],
     );
 
     return res.status(200).json({
@@ -143,7 +143,7 @@ const get_Tenants = async (req, res) => {
         isconsented || null,
         isactive || null,
         isapproved || null, // ✅ added
-      ]
+      ],
     );
 
     const rows = result.rows.map((row) => ({
@@ -179,10 +179,14 @@ const check_ConsentStatus = async (req, res) => {
     const tenantId = req.tenantId;
     console.log("[CONSENT STATUS] ── Incoming request ──────────────────────");
     console.log(`[CONSENT STATUS] tenantId=${tenantId ?? "MISSING"}`);
-    console.log(`[CONSENT STATUS] req.user=${JSON.stringify(req.user ?? null)}`);
+    console.log(
+      `[CONSENT STATUS] req.user=${JSON.stringify(req.user ?? null)}`,
+    );
 
     if (!tenantId) {
-      console.error("[CONSENT STATUS] ❌ tenantId is missing from request — check validateToken middleware");
+      console.error(
+        "[CONSENT STATUS] ❌ tenantId is missing from request — check validateToken middleware",
+      );
       return res.status(400).json({ error: "Missing tenantId" });
     }
 
@@ -196,7 +200,9 @@ const check_ConsentStatus = async (req, res) => {
     console.log(`[CONSENT STATUS] Step 1 — DB row found: ${row !== null}`);
 
     if (!row) {
-      console.log("[CONSENT STATUS] Step 2 — Tenant not in DB, starting auto-provision...");
+      console.log(
+        "[CONSENT STATUS] Step 2 — Tenant not in DB, starting auto-provision...",
+      );
 
       // ── Extract Bearer token from the incoming request ───────────────────
       // We use the user's own delegated token here — NOT getAccessToken(tenantId).
@@ -204,123 +210,193 @@ const check_ConsentStatus = async (req, res) => {
       // so client_credentials would be rejected by Azure. The user's Bearer
       // token already has User.Read + openid which is enough for GET /organization.
       const authHeader = req.headers?.authorization ?? "";
-      const userBearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+      const userBearerToken = authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7)
+        : null;
 
-      console.log(`[CONSENT STATUS] Step 2 — Bearer token present: ${userBearerToken !== null}`);
-      console.log(`[CONSENT STATUS] Step 2 — req.user.oid=${req.user?.oid ?? "MISSING"}`);
+      console.log(
+        `[CONSENT STATUS] Step 2 — Bearer token present: ${userBearerToken !== null}`,
+      );
+      console.log(
+        `[CONSENT STATUS] Step 2 — req.user.oid=${req.user?.oid ?? "MISSING"}`,
+      );
 
       if (!userBearerToken) {
-        console.error("[CONSENT STATUS] ❌ No Bearer token on request — cannot call Graph for auto-provision");
-        return res.status(500).json({ error: "Failed to auto-provision tenant" });
+        console.error(
+          "[CONSENT STATUS] ❌ No Bearer token on request — cannot call Graph for auto-provision",
+        );
+        return res
+          .status(500)
+          .json({ error: "Failed to auto-provision tenant" });
       }
 
-      // ── Step 2a: Call Graph /organization ───────────────────────────────
+      // ── Step 2a: Exchange API token → Graph token via OBO ───────────────────
+      let graphToken = null;
+      try {
+        console.log(
+          "[CONSENT STATUS] Step 2a — Exchanging API token for Graph token via OBO...",
+        );
+        graphToken = await exchangeForGraphToken(userBearerToken, tenantId);
+        console.log("[CONSENT STATUS] Step 2a ✅ Graph token acquired via OBO");
+      } catch (oboErr) {
+        console.error("[CONSENT STATUS] Step 2a ❌ OBO token exchange failed");
+        console.error(
+          `[CONSENT STATUS] Step 2a — status=${oboErr.response?.status ?? "no response"}`,
+        );
+        console.error(
+          `[CONSENT STATUS] Step 2a — error=${oboErr.response?.data?.error_description ?? oboErr.message}`,
+        );
+        return res
+          .status(500)
+          .json({ error: "Failed to auto-provision tenant" });
+      }
+
+      // ── Step 2b: Call Graph /organization with Graph-scoped token ────────────
       let org = null;
       try {
-        console.log("[CONSENT STATUS] Step 2a — Calling Graph /organization with user token...");
+        console.log(
+          "[CONSENT STATUS] Step 2b — Calling Graph /organization...",
+        );
         const orgRes = await axios.get(`${GRAPH_URL}/organization`, {
-          headers: { Authorization: `Bearer ${userBearerToken}` },
+          headers: { Authorization: `Bearer ${graphToken}` },
           params: { $select: "id,displayName,technicalNotificationMails" },
           timeout: 10000,
         });
         org = orgRes.data.value?.[0] ?? null;
-        console.log(`[CONSENT STATUS] Step 2a ✅ org=${org?.displayName ?? "null"} | id=${org?.id ?? "null"}`);
+        console.log(
+          `[CONSENT STATUS] Step 2b ✅ org=${org?.displayName ?? "null"} | id=${org?.id ?? "null"}`,
+        );
       } catch (graphErr) {
-        console.error("[CONSENT STATUS] Step 2a ❌ Graph /organization call failed");
-        console.error(`[CONSENT STATUS] Step 2a — status=${graphErr.response?.status ?? "no response"}`);
-        console.error(`[CONSENT STATUS] Step 2a — error=${graphErr.response?.data?.error?.message ?? graphErr.message}`);
-        return res.status(500).json({ error: "Failed to auto-provision tenant" });
+        console.error(
+          "[CONSENT STATUS] Step 2b ❌ Graph /organization call failed",
+        );
+        console.error(
+          `[CONSENT STATUS] Step 2b — status=${graphErr.response?.status ?? "no response"}`,
+        );
+        console.error(
+          `[CONSENT STATUS] Step 2b — error=${graphErr.response?.data?.error?.message ?? graphErr.message}`,
+        );
+        return res
+          .status(500)
+          .json({ error: "Failed to auto-provision tenant" });
       }
-
-      if (!org) {
-        console.error("[CONSENT STATUS] Step 2a ❌ Graph returned no org object");
-        return res.status(404).json({ error: "Tenant organization not found in Microsoft Graph" });
-      }
-
-      const tenantName  = org.displayName ?? null;
-      const tenantEmail = org.technicalNotificationMails?.[0] ?? null;
-      const createdBy   = req.user?.oid ?? null;
-      console.log(`[CONSENT STATUS] Step 2a — tenantName=${tenantName} | tenantEmail=${tenantEmail} | createdBy=${createdBy}`);
-
+      
       // ── Step 2b: Dynamics lookup (non-fatal) ─────────────────────────────
       let dynamicsAccountId = null;
       try {
-        console.log("[CONSENT STATUS] Step 2b — Resolving Dynamics accountid...");
+        console.log(
+          "[CONSENT STATUS] Step 2b — Resolving Dynamics accountid...",
+        );
         const dynamicsToken = await getDynamicsToken();
         const accountRes = await axios.get(
           `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts?$filter=ss_azuretenantid eq '${tenantId}'&$select=accountid&$top=1`,
           {
             headers: {
-              Authorization:      `Bearer ${dynamicsToken}`,
-              Accept:             "application/json",
-              "OData-Version":    "4.0",
+              Authorization: `Bearer ${dynamicsToken}`,
+              Accept: "application/json",
+              "OData-Version": "4.0",
               "OData-MaxVersion": "4.0",
             },
           },
         );
         dynamicsAccountId = accountRes.data.value?.[0]?.accountid ?? null;
-        console.log(`[CONSENT STATUS] Step 2b ✅ dynamicsAccountId=${dynamicsAccountId ?? "not found"}`);
+        console.log(
+          `[CONSENT STATUS] Step 2b ✅ dynamicsAccountId=${dynamicsAccountId ?? "not found"}`,
+        );
       } catch (dynErr) {
-        console.warn(`[CONSENT STATUS] Step 2b ⚠️ Dynamics lookup failed (non-fatal): ${dynErr.message}`);
+        console.warn(
+          `[CONSENT STATUS] Step 2b ⚠️ Dynamics lookup failed (non-fatal): ${dynErr.message}`,
+        );
       }
 
       // ── Step 2c: Insert tenant into DB ───────────────────────────────────
       try {
         console.log("[CONSENT STATUS] Step 2c — Inserting tenant into DB...");
-        console.log(`[CONSENT STATUS] Step 2c — params: tenantId=${tenantId}, tenantName=${tenantName}, tenantEmail=${tenantEmail}, createdBy=${createdBy}, dynamicsAccountId=${dynamicsAccountId}`);
+        console.log(
+          `[CONSENT STATUS] Step 2c — params: tenantId=${tenantId}, tenantName=${tenantName}, tenantEmail=${tenantEmail}, createdBy=${createdBy}, dynamicsAccountId=${dynamicsAccountId}`,
+        );
         await client.query(
           "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7) AS tenantuuid",
-          [tenantId, tenantName, tenantEmail, createdBy, dynamicsAccountId, null, null],
+          [
+            tenantId,
+            tenantName,
+            tenantEmail,
+            createdBy,
+            dynamicsAccountId,
+            null,
+            null,
+          ],
         );
-        console.log(`[CONSENT STATUS] Step 2c ✅ Tenant inserted — ${tenantId} (${tenantName})`);
+        console.log(
+          `[CONSENT STATUS] Step 2c ✅ Tenant inserted — ${tenantId} (${tenantName})`,
+        );
       } catch (dbErr) {
         console.error("[CONSENT STATUS] Step 2c ❌ DB insert failed");
         console.error(`[CONSENT STATUS] Step 2c — ${dbErr.message}`);
-        return res.status(500).json({ error: "Failed to auto-provision tenant" });
+        return res
+          .status(500)
+          .json({ error: "Failed to auto-provision tenant" });
       }
 
       // ── Step 2d: Re-fetch newly created row ──────────────────────────────
       try {
-        console.log("[CONSENT STATUS] Step 2d — Re-fetching tenant row from DB...");
+        console.log(
+          "[CONSENT STATUS] Step 2d — Re-fetching tenant row from DB...",
+        );
         const newResult = await client.query(
           `SELECT * FROM public.tenant_get_map_with_entratenantid() WHERE entratenantid = $1`,
           [tenantId],
         );
         const newRow = newResult.rows[0] ?? null;
-        console.log(`[CONSENT STATUS] Step 2d — row found after insert: ${newRow !== null}`);
+        console.log(
+          `[CONSENT STATUS] Step 2d — row found after insert: ${newRow !== null}`,
+        );
 
         if (!newRow) {
-          console.error("[CONSENT STATUS] Step 2d ❌ Row still not found after insert — possible SP or RLS issue");
-          return res.status(500).json({ error: "Failed to auto-provision tenant" });
+          console.error(
+            "[CONSENT STATUS] Step 2d ❌ Row still not found after insert — possible SP or RLS issue",
+          );
+          return res
+            .status(500)
+            .json({ error: "Failed to auto-provision tenant" });
         }
 
-        const consented  = newRow.isconsented === true;
-        const isactive   = newRow.isactive === true;
+        const consented = newRow.isconsented === true;
+        const isactive = newRow.isactive === true;
         const isapproved = newRow.isapproved === true;
 
-        console.log(`[CONSENT STATUS] ✅ Done — consented=${consented} | isactive=${isactive} | isapproved=${isapproved}`);
-        return res.status(200).json({ consented, isactive, isapproved, tenantId });
+        console.log(
+          `[CONSENT STATUS] ✅ Done — consented=${consented} | isactive=${isactive} | isapproved=${isapproved}`,
+        );
+        return res
+          .status(200)
+          .json({ consented, isactive, isapproved, tenantId });
       } catch (refetchErr) {
-        console.error("[CONSENT STATUS] Step 2d ❌ Re-fetch after insert failed:", refetchErr.message);
-        return res.status(500).json({ error: "Failed to auto-provision tenant" });
+        console.error(
+          "[CONSENT STATUS] Step 2d ❌ Re-fetch after insert failed:",
+          refetchErr.message,
+        );
+        return res
+          .status(500)
+          .json({ error: "Failed to auto-provision tenant" });
       }
     }
 
     // ── Existing tenant ──────────────────────────────────────────────────────
-    const consented  = row.isconsented === true;
-    const isactive   = row.isactive === true;
+    const consented = row.isconsented === true;
+    const isactive = row.isactive === true;
     const isapproved = row.isapproved === true;
 
-    console.log(`[CONSENT STATUS] ✅ Existing tenant — consented=${consented} | isactive=${isactive} | isapproved=${isapproved}`);
+    console.log(
+      `[CONSENT STATUS] ✅ Existing tenant — consented=${consented} | isactive=${isactive} | isapproved=${isapproved}`,
+    );
     return res.status(200).json({ consented, isactive, isapproved, tenantId });
-
   } catch (err) {
     console.error("[CONSENT STATUS] ❌ Unhandled exception:", err.message);
     console.error(err.stack);
     return res.status(500).json({ error: "Internal Server Error" });
   }
 };
-
 
 // ─── Get Tenant Information ───────────────────────────────────────────────────
 // Extracts tid from the Bearer access token (req.user.tid injected by validateToken middleware),
@@ -421,7 +497,31 @@ const get_TenantInfo = async (req, res) => {
     return res.status(500).json({ error: "Internal Server Error" });
   }
 };
+// ─── Exchange API token for a Graph token via OBO flow ────────────────────────
+// The token arriving on req is scoped to our app (aud = AZURE_CLIENT_ID).
+// Graph rejects it with 401 "Invalid audience". OBO exchanges it for a
+// Graph-scoped token while preserving the user's identity/claims.
+const exchangeForGraphToken = async (userApiToken, tenantId) => {
+  const params = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    client_id: AZURE_CLIENT_ID,
+    client_secret: process.env.AZURE_CLIENT_SECRET,
+    assertion: userApiToken,
+    requested_token_use: "on_behalf_of",
+    scope: "https://graph.microsoft.com/Organization.Read.All offline_access",
+  });
 
+  const response = await axios.post(
+    `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+    params.toString(),
+    {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      timeout: 10000,
+    },
+  );
+
+  return response.data.access_token;
+};
 module.exports = {
   create_Tenant,
   update_Tenant,
