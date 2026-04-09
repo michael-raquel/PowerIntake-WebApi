@@ -196,7 +196,7 @@ const step4_updateTenantRecord = async (tenant, tenantName, tenantEmail, dynamic
   );
 
   console.log(
-    `[STEP 4] ✅ Tenant updated — isconsented=true | name=${finalTenantName} | email=${finalTenantEmail} | tenantuuid=${current.tenantuuid}`,
+    `[STEP 4] ✅ Tenant updated — isconsented=true | name=${finalTenantName} | email=${finalTenantEmail}`,
   );
 
   return current.tenantuuid;
@@ -472,14 +472,13 @@ const flow5_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId,
 const flow6_persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId) => {
   console.log(`[FLOW 6] Persisting group IDs to DB for tenantUuid=${tenantUuid}...`);
 
-  const result = await client.query(`SELECT public.tenant_update_groups($1, $2, $3)`, [
+  await client.query(`SELECT public.tenant_update_groups($1, $2, $3)`, [
     tenantUuid,
     adminGroupId,
     usersGroupId,
   ]);
 
   console.log(`[FLOW 6] ✅ Persisted — adminGroupId: ${adminGroupId}, usersGroupId: ${usersGroupId}`);
-  console.log(`[FLOW 6] DB result:`, result.rows[0]);
 };
 
 // ─── Background Provisioning Orchestrator ────────────────────────────────────
@@ -488,19 +487,24 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
   console.log("[POST-CONSENT] ── Starting background provisioning ────────────");
   const headers = makeHeaders(token);
 
-  const enterpriseSp = await flow1_resolveEnterpriseSp(headers);
-  const { adminGroupId, usersGroupId } = await flow2_ensureGroups(headers);
-  await flow3_assignAdminToGroups(headers, adminOid, adminGroupId, usersGroupId);
-  await flow4_batchAssignUsersToGroup(headers, usersGroupId);
-  await flow5_assignGroupsToAppRoles(headers, adminGroupId, usersGroupId, enterpriseSp.id);
+  try {
+    const enterpriseSp = await flow1_resolveEnterpriseSp(headers);
+    const { adminGroupId, usersGroupId } = await flow2_ensureGroups(headers);
+    await flow3_assignAdminToGroups(headers, adminOid, adminGroupId, usersGroupId);
+    await flow4_batchAssignUsersToGroup(headers, usersGroupId);
+    await flow5_assignGroupsToAppRoles(headers, adminGroupId, usersGroupId, enterpriseSp.id);
 
-  if (tenantUuid) {
-    await flow6_persistGroupIdsToDb(tenantUuid, adminGroupId, usersGroupId);
-  } else {
-    console.warn("[POST-CONSENT] ⚠️ Skipping Flow 6 — tenantUuid is null");
+    if (tenantUuid) {
+      await flow6_persistGroupIdsToDb(tenantUuid, adminGroupId, usersGroupId);
+    } else {
+      console.warn("[POST-CONSENT] ⚠️ Skipping Flow 6 — tenantUuid is null");
+    }
+
+    console.log("[POST-CONSENT] ✅ Full post-consent flow completed successfully");
+  } catch (err) {
+    console.error("[POST-CONSENT] ❌ Post-consent flow error:", err.message);
+    console.error(err.stack);
   }
-
-  console.log("[POST-CONSENT] ✅ Full post-consent flow completed successfully");
 };
 
 // ─── Consent Callback (Main Entry Point) ─────────────────────────────────────
@@ -547,35 +551,29 @@ const consent_Callback = async (req, res) => {
     const { tenantName, tenantDomain, tenantEmail, dynamicsAccountId } =
       await step2_fetchOrgAndDynamics(token, tenant);
 
+    // Step 3 — Auto-grant Graph app permissions (non-fatal)
+    try {
+      await step3_grantGraphPermissions(token);
+    } catch (grantErr) {
+      console.warn("[CONSENT] Step 3 ⚠️ Could not auto-grant Graph permissions:", grantErr.message);
+    }
+
+    // Step 4 — Single atomic DB update: isconsented=true + real org info from Graph
+    // Returns tenantuuid so we don't need a separate round-trip
+    const tenantUuid = await step4_updateTenantRecord(tenant, tenantName, tenantEmail, dynamicsAccountId);
+
     // ── Respond immediately — don't block the browser on background provisioning
     console.log("[CONSENT] ✅ Responding with consent=success — firing background provisioning");
     res.json({ redirectUrl: "/consent-callback?consent=success" });
 
-    // ── Fire-and-forget: Step 3, Step 4, and full provisioning flow
-    // Delay to ensure consent is fully propagated before provisioning
-    setTimeout(async () => {
-      try {
-        // Step 3 — Auto-grant Graph app permissions (non-fatal)
-        try {
-          await step3_grantGraphPermissions(token);
-        } catch (grantErr) {
-          console.warn("[CONSENT] Step 3 ⚠️ Could not auto-grant Graph permissions:", grantErr.message);
-        }
-
-        // Step 4 — Single atomic DB update: isconsented=true + real org info from Graph
-        // Returns tenantuuid so we don't need a separate round-trip
-        const tenantUuid = await step4_updateTenantRecord(tenant, tenantName, tenantEmail, dynamicsAccountId);
-
-        // Run full post-consent provisioning flow
-        await runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
-      } catch (asyncErr) {
-        console.error("[CONSENT] ❌ Background provisioning error:", asyncErr.message);
-        console.error(asyncErr.stack);
-      }
-    }, 3000);
+    // ── Fire-and-forget: groups, user assignment, app role assignment
+    // Wait briefly to ensure consent is fully propagated before provisioning
+    setTimeout(() => {
+      runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
+    }, 2000);
 
   } catch (err) {
-    console.error("[CONSENT] ❌ Unhandled exception in Steps 1-2:", err.message);
+    console.error("[CONSENT] ❌ Unhandled exception:", err.message);
     console.error(err.stack);
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
