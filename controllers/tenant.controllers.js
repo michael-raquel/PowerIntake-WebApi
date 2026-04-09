@@ -1,7 +1,7 @@
 const client = require("../config/db");
 const axios = require("axios");
 const { getAccessToken } = require("../config/authService");
-const { getDynamicsToken } = require("../utils/dynamicsToken");
+const { getDynamicsToken } = require('../utils/dynamicsToken');
 
 const GRAPH_URL = "https://graph.microsoft.com/v1.0";
 
@@ -94,7 +94,7 @@ const update_Tenant = async (req, res) => {
         parseBool(isactive, "isactive"),
         parseBool(isconsented, "isconsented"),
         parseBool(isapproved, "isapproved"), // ✅ added
-      ],
+      ]
     );
 
     return res.status(200).json({
@@ -143,7 +143,7 @@ const get_Tenants = async (req, res) => {
         isconsented || null,
         isactive || null,
         isapproved || null, // ✅ added
-      ],
+      ]
     );
 
     const rows = result.rows.map((row) => ({
@@ -176,11 +176,12 @@ const get_Tenants = async (req, res) => {
 
 const check_ConsentStatus = async (req, res) => {
   try {
-    const tenantId = req.tenantId;
+    const tenantId = req.tenantId; 
     console.log("[CONSENT STATUS] Checking for tenantId:", tenantId);
 
     const result = await client.query(
-      `SELECT * FROM public.tenant_get_map_with_entratenantid() WHERE entratenantid = $1`,
+      `SELECT * FROM public.tenant_get_map_with_entratenantid()
+       WHERE entratenantid = $1`,
       [tenantId],
     );
 
@@ -188,20 +189,13 @@ const check_ConsentStatus = async (req, res) => {
 
     if (!row) {
       console.log(
-        "[CONSENT STATUS] Tenant not found, auto-creating via delegated token...",
+        "[CONSENT STATUS] Tenant not found, fetching from Graph and creating...",
       );
 
       try {
-        // ✅ Use the user's own Bearer token from the request — it's a delegated
-        // token the Global Admin already has. Don't call getAccessToken(tenantId)
-        // here because the enterprise app SP doesn't exist in the tenant yet.
-        const userBearerToken = req.headers.authorization?.split(" ")[1];
-        if (!userBearerToken) {
-          throw new Error("No Bearer token on request — cannot query Graph");
-        }
-
+        const token = await getAccessToken(tenantId);
         const orgRes = await axios.get(`${GRAPH_URL}/organization`, {
-          headers: { Authorization: `Bearer ${userBearerToken}` },
+          headers: { Authorization: `Bearer ${token}` },
           params: {
             $select: "id,displayName,technicalNotificationMails",
           },
@@ -209,6 +203,7 @@ const check_ConsentStatus = async (req, res) => {
         });
 
         const org = orgRes.data.value?.[0];
+
         if (!org) {
           return res
             .status(404)
@@ -217,56 +212,52 @@ const check_ConsentStatus = async (req, res) => {
             });
         }
 
-        const tenantName = org.displayName ?? null;
+        const tenantName  = org.displayName ?? null;
         const tenantEmail = org.technicalNotificationMails?.[0] ?? null;
-        const createdBy = req.user?.oid ?? null;
-
-        // Dynamics lookup is fine to attempt, but don't let it block tenant creation
+        const createdBy   = req.user?.oid ?? null;
         let dynamicsAccountId = null;
+
         try {
           const dynamicsToken = await getDynamicsToken();
           const accountRes = await axios.get(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts?$filter=ss_azuretenantid eq '${tenantId}'&$select=accountid&$top=1`,
             {
               headers: {
-                Authorization: `Bearer ${dynamicsToken}`,
-                Accept: "application/json",
-                "OData-Version": "4.0",
+                Authorization:      `Bearer ${dynamicsToken}`,
+                Accept:             "application/json",
+                "OData-Version":    "4.0",
                 "OData-MaxVersion": "4.0",
-              },
-            },
+              }
+            }
           );
           dynamicsAccountId = accountRes.data.value?.[0]?.accountid ?? null;
-          console.log(
-            "[CONSENT STATUS] Resolved dynamicsaccountid:",
-            dynamicsAccountId,
-          );
+          console.log("[CONSENT STATUS] Resolved dynamicsaccountid:", dynamicsAccountId);
         } catch (dynErr) {
-          console.warn(
-            "[CONSENT STATUS] Could not resolve dynamicsaccountid:",
-            dynErr.message,
-          );
+          console.warn("[CONSENT STATUS] Could not resolve dynamicsaccountid:", dynErr.message);
         }
 
         await client.query(
           "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7) AS tenantuuid",
-          [
-            tenantId,
-            tenantName,
-            tenantEmail,
-            createdBy,
-            dynamicsAccountId,
-            null,
-            null,
-          ],
+          [tenantId, tenantName, tenantEmail, createdBy, dynamicsAccountId, null, null]
         );
+
+        // const tenantName = org.displayName ?? null;
+        // const tenantEmail = org.technicalNotificationMails?.[0] ?? null;
+        // const createdBy = req.user?.oid ?? null;
+
+        // await client.query(
+        //   "SELECT public.tenant_create($1, $2, $3, $4, $5, $6, $7, $7) AS tenantuuid",
+        //   [tenantId, tenantName, tenantEmail, createdBy, null, null, null, ],
+        // );
 
         console.log(
           `[CONSENT STATUS] Tenant auto-created: ${tenantId} (${tenantName})`,
         );
 
+        // Re-fetch the newly created row
         const newResult = await client.query(
-          `SELECT * FROM public.tenant_get_map_with_entratenantid() WHERE entratenantid = $1`,
+          `SELECT * FROM public.tenant_get_map_with_entratenantid()
+           WHERE entratenantid = $1`,
           [tenantId],
         );
         row = newResult.rows[0] ?? null;
@@ -292,6 +283,7 @@ const check_ConsentStatus = async (req, res) => {
     return res.status(500).json({ error: "Internal Server Error" });
   }
 };
+
 
 // ─── Get Tenant Information ───────────────────────────────────────────────────
 // Extracts tid from the Bearer access token (req.user.tid injected by validateToken middleware),
