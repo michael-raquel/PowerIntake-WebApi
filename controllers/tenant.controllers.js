@@ -390,10 +390,66 @@ const get_TenantInfo = async (req, res) => {
   }
 };
 
+
+// ─── Get Graph Org Info ───────────────────────────────────────────────────────
+// Returns displayName, default domain, and technical notification email
+// for the calling tenant. Requires a post-consent token (enterprise app SP
+// must already exist in the tenant).
+
+const get_GraphOrgInfo = async (req, res) => {
+  try {
+    const tenantId = req.user?.tid || req.tenantId;
+
+    if (!tenantId) {
+      return res.status(400).json({ error: "Unable to resolve tenantId from access token" });
+    }
+
+    const token   = await getAccessToken(tenantId);
+    const headers = { Authorization: `Bearer ${token}` };
+
+    const orgRes = await axios.get(`${GRAPH_URL}/organization`, {
+      headers,
+      params: {
+        $select: "displayName,verifiedDomains,technicalNotificationMails",
+      },
+      timeout: 10000,
+    });
+
+    const org = orgRes.data.value?.[0];
+
+    if (!org) {
+      return res.status(404).json({ error: "Tenant organization not found in Microsoft Graph" });
+    }
+
+    return res.status(200).json({
+      displayName:  org.displayName ?? null,
+      defaultDomain: org.verifiedDomains?.find((d) => d.isDefault)?.name ?? null,
+      email:         org.technicalNotificationMails?.[0] ?? null,
+    });
+  } catch (err) {
+    console.error("get_GraphOrgInfo error:", err.message);
+
+    if (err.response) {
+      return res.status(err.response.status).json({
+        error: err.response.data?.error?.message || "Graph API Error",
+      });
+    }
+
+    if (err.request) {
+      return res.status(504).json({
+        error: "No response from Microsoft Graph (Timeout or Network Issue)",
+      });
+    }
+
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+
 module.exports = {
   create_Tenant,
   update_Tenant,
   get_Tenants,
   check_ConsentStatus,
   get_TenantInfo,
+   get_GraphOrgInfo,
 };
