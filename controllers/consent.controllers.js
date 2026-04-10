@@ -166,27 +166,18 @@ const step4_markTenantConsented = async (tenant) => {
 const flow1_resolveEnterpriseSp = async (headers) => {
   console.log("[FLOW 1] Resolving enterprise app SP in consenting tenant...");
 
-  const sp = await withRetry(
-    "resolve enterprise SP",
-    async () => {
-      const spRes = await axios.get(
-        `${GRAPH_URL}/servicePrincipals?$filter=appId eq '${process.env.AZURE_CLIENT_ID}'&$select=id,appId,displayName`,
-        { headers, timeout: 10000 },
-      );
-      const sp = spRes.data.value?.[0];
-
-      if (!sp) {
-        const err = new Error(
-          `Enterprise app SP not found in consenting tenant for appId=${process.env.AZURE_CLIENT_ID}`,
-        );
-        err.response = { status: 404 };
-        throw err;
-      }
-
-      return sp;
-    },
-    { retries: 5, delayMs: 3000 },
+  const spRes = await axios.get(
+    `${GRAPH_URL}/servicePrincipals?$filter=appId eq '${process.env.AZURE_CLIENT_ID}'&$select=id,appId,displayName`,
+    { headers, timeout: 10000 },
   );
+  const sp = spRes.data.value?.[0];
+
+  if (!sp) {
+    throw new Error(
+      `[FLOW 1] Enterprise app SP not found in consenting tenant for appId=${process.env.AZURE_CLIENT_ID}. ` +
+        `Ensure the tenant has completed admin consent.`,
+    );
+  }
 
   console.log(`[FLOW 1] ✅ Resolved enterprise SP — id=${sp.id}, displayName=${sp.displayName}`);
   return sp;
@@ -506,17 +497,11 @@ const consent_Callback = async (req, res) => {
     // Step 4 — Flip isconsented=true; resolve tenantuuid for Flow 6
     const tenantUuid = await step4_markTenantConsented(tenant);
 
-    // Flows 1–6 — Run provisioning flow (non-fatal)
+    // Flows 1–6 — Await the full provisioning chain before responding
     console.log("[CONSENT] ⏳ Running full provisioning flow before responding...");
-    try {
-      await runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
-      console.log("[CONSENT] ✅ Provisioning complete — responding with consent=success");
-    } catch (flowErr) {
-      console.error("[CONSENT] ⚠️ Provisioning flow failed (non-fatal):", flowErr.message);
-      console.error(flowErr.stack);
-      console.log("[CONSENT] ⚠️ Consent marked successful, but group setup incomplete");
-    }
+    await runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
 
+    console.log("[CONSENT] ✅ Provisioning complete — responding with consent=success");
     return res.json({ redirectUrl: "/consent-callback?consent=success" });
 
   } catch (err) {
