@@ -54,6 +54,9 @@ const step1_acquireToken = async (tenant) => {
 };
 
 // ─── Step 2: Fetch Org Info + Dynamics in Parallel ───────────────────────────
+// Fetches displayName and technicalNotificationMails[0] from Graph /organization,
+// and the Dynamics accountid in parallel. Both are non-fatal — nulls are returned
+// on failure and the DB update falls back to existing values.
 
 const step2_fetchOrgAndDynamics = async (token, tenant) => {
   console.log("[STEP 2] Fetching org info (Graph) + Dynamics accountid in parallel...");
@@ -83,6 +86,7 @@ const step2_fetchOrgAndDynamics = async (token, tenant) => {
     })(),
   ]);
 
+  // Graph: pull displayName and first technicalNotificationMail
   let tenantName   = null;
   let tenantDomain = null;
   let tenantEmail  = null;
@@ -96,6 +100,7 @@ const step2_fetchOrgAndDynamics = async (token, tenant) => {
     console.warn(`[STEP 2] ⚠️ Graph org fetch failed (non-fatal): ${orgResult.reason?.message}`);
   }
 
+  // Dynamics: pull accountid
   let dynamicsAccountId = null;
   if (dynamicsResult.status === "fulfilled") {
     dynamicsAccountId = dynamicsResult.value.data.value?.[0]?.accountid ?? null;
@@ -161,6 +166,8 @@ const step3_grantGraphPermissions = async (token) => {
 };
 
 // ─── Step 4: Mark Tenant as Consented ────────────────────────────────────────
+// Uses the focused tenant_update_isconsented function to flip the consent flag,
+// then resolves the tenantuuid needed by Flow 6's full tenant_update call.
 
 const step4_markTenantConsented = async (tenant) => {
   console.log(`[STEP 4] Marking tenant as consented — entratenantid=${tenant}...`);
@@ -173,19 +180,22 @@ const step4_markTenantConsented = async (tenant) => {
   const row = result.rows[0];
   console.log(`[STEP 4] ✅ DB response — updated=${row?.updated} | message=${row?.message}`);
 
+  // Fetch the full current row — tenantuuid is required by Flow 6,
+  // and existing field values are used as fallbacks if Graph returned nulls.
   const tenantRes = await client.query(
-    `SELECT tenantuuid FROM public.tenant WHERE entratenantid = $1`,
+    `SELECT tenantuuid, tenantname, tenantemail, dynamicsaccountid, admingroupid, usergroupid, isactive, isapproved
+     FROM public.tenant WHERE entratenantid = $1`,
     [tenant],
   );
-  const tenantUuid = tenantRes.rows[0]?.tenantuuid ?? null;
+  const current = tenantRes.rows[0] ?? null;
 
-  if (!tenantUuid) {
-    console.warn(`[STEP 4] ⚠️ Could not resolve tenantuuid for tenant=${tenant} — group persistence will be skipped`);
-  } else {
-    console.log(`[STEP 4] ✅ Resolved tenantuuid=${tenantUuid}`);
+  if (!current) {
+    console.warn(`[STEP 4] ⚠️ Could not resolve tenant row for tenant=${tenant} — Flow 6 will be skipped`);
+    return { tenantUuid: null, current: null };
   }
 
-  return tenantUuid;
+  console.log(`[STEP 4] ✅ Resolved tenantuuid=${current.tenantuuid}`);
+  return { tenantUuid: current.tenantuuid, current };
 };
 
 // ─── Flow 1: Resolve Enterprise SP in Consenting Tenant ──────────────────────
@@ -211,8 +221,6 @@ const flow1_resolveEnterpriseSp = async (headers) => {
 };
 
 // ─── Flow 2: Ensure Groups Exist ─────────────────────────────────────────────
-// After creating a group, waits 5s for Microsoft's directory to propagate it
-// before any subsequent flow tries to read or write members/roles.
 
 const flow2_ensureGroups = async (headers) => {
   console.log("[FLOW 2] Ensuring PowerIntake groups exist...");
@@ -259,7 +267,7 @@ const flow2_ensureGroups = async (headers) => {
 
   console.log(`[FLOW 2] ✅ Groups ensured — adminGroupId=${adminGroupId} | usersGroupId=${usersGroupId}`);
 
-  // Allow time for Microsoft's directory to propagate newly created groups.
+  // Wait for Microsoft's directory to propagate newly created groups.
   // Without this, Flow 3 member adds and Flow 4 member reads return 404.
   console.log("[FLOW 2] ⏳ Waiting 5s for directory propagation before proceeding...");
   await new Promise((r) => setTimeout(r, 5000));
@@ -301,17 +309,12 @@ const flow3_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersG
 };
 
 // ─── Flow 4: Batch Assign Active Tenant Users to PowerIntake.Users ────────────
-// Only users with accountEnabled=true are fetched. Before adding, the current
-// membership of PowerIntake.Users is fetched (with retry for propagation lag)
-// and used to skip users who are already members — no duplicates, no errors.
+// Only accountEnabled=true users are fetched. Existing members are fetched with
+// retry (propagation lag) and used to skip duplicates before batching.
 
 const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
   console.log("[FLOW 4] Batch assigning active tenant users to PowerIntake.Users...");
 
-  // ── Strategy cascade: fetch only accountEnabled=true users ─────────────────
-  // Strategy 1: Standard $filter (works on most tenants)
-  // Strategy 2: Advanced query mode with ConsistencyLevel: eventual
-  // Strategy 3: Unfiltered fallback — all users regardless of accountEnabled
   const fetchActiveUsers = async () => {
     // Strategy 1 — standard filter
     try {
@@ -381,9 +384,8 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
     return;
   }
 
-  // ── Fetch existing PowerIntake.Users members to avoid duplicate adds ─────────
-  // Uses withRetry because newly created groups may return 404 for a few
-  // seconds even after the 5s propagation wait in Flow 2.
+  // Fetch existing PowerIntake.Users members to avoid duplicate adds.
+  // withRetry handles transient 404s from directory propagation lag.
   const existingMemberIds = new Set();
   await withRetry(`fetch existing members for group=${usersGroupId}`, async () => {
     existingMemberIds.clear();
@@ -395,7 +397,6 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
     }
   });
 
-  // Only add users who are active AND not already members of PowerIntake.Users
   const usersToAdd = allUsers.filter((u) => !existingMemberIds.has(u.id));
 
   if (usersToAdd.length === 0) {
@@ -407,7 +408,6 @@ const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
     `[FLOW 4] Adding ${usersToAdd.length} active users (${existingMemberIds.size} already members, skipped)...`,
   );
 
-  // ── Batch add in chunks of 20 (Graph API limit per PATCH) ───────────────────
   const chunkSize = 20;
   for (let i = 0; i < usersToAdd.length; i += chunkSize) {
     const chunk    = usersToAdd.slice(i, i + chunkSize);
@@ -468,27 +468,80 @@ const flow5_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId,
   console.log("[FLOW 5] ✅ App role assignment complete");
 };
 
-// ─── Flow 6: Persist Group IDs to DB ─────────────────────────────────────────
+// ─── Flow 6: Full Tenant Update to DB ────────────────────────────────────────
+// Replaces tenant_update_groups with the full tenant_update function so that
+// tenantname (Graph displayName) and tenantemail (technicalNotificationMails[0])
+// are persisted alongside the group IDs in a single atomic operation.
+//
+// Field resolution priority:
+//   - tenantName  → Graph displayName        → fallback: existing DB value
+//   - tenantEmail → technicalNotificationMails[0] → fallback: existing DB value
+//   - dynamicsAccountId                      → fallback: existing DB value
+//   - adminGroupId / usersGroupId            → resolved in Flow 2 (never null here)
+//   - isactive / isapproved                  → preserved from current DB row
+//   - isconsented                            → always true (set in Step 4)
 
-const flow6_persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId) => {
-  console.log(`[FLOW 6] Persisting group IDs to DB for tenantUuid=${tenantUuid}...`);
+const flow6_persistTenantUpdate = async (
+  tenantUuid,
+  tenant,
+  current,
+  tenantName,
+  tenantEmail,
+  dynamicsAccountId,
+  adminGroupId,
+  usersGroupId,
+) => {
+  console.log(`[FLOW 6] Running full tenant_update for tenantUuid=${tenantUuid}...`);
+
+  // Prefer real Graph/Dynamics data; fall back to whatever is already in the DB
+  // so we never overwrite a good value with null.
+  const finalTenantName       = tenantName        || current.tenantname;
+  const finalTenantEmail      = tenantEmail        || current.tenantemail;
+  const finalDynamicsAccountId = dynamicsAccountId || current.dynamicsaccountid;
+
+  if (!finalTenantName) {
+    throw new Error(
+      `[FLOW 6] Cannot update tenant — tenantname is null in both Graph and DB for tenant=${tenant}`,
+    );
+  }
+
+  console.log(`[FLOW 6] tenantName=${finalTenantName} | tenantEmail=${finalTenantEmail} | dynamicsAccountId=${finalDynamicsAccountId}`);
   console.log(`[FLOW 6] adminGroupId=${adminGroupId} | usersGroupId=${usersGroupId}`);
 
-  await client.query(`SELECT public.tenant_update_groups($1, $2, $3)`, [
-    tenantUuid,
-    adminGroupId,
-    usersGroupId,
-  ]);
+  await client.query(
+    `SELECT public.tenant_update($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      tenantUuid,              // p_tenantuuid
+      tenant,                  // p_entratenantid
+      finalTenantName,         // p_tenantname       ← Graph displayName
+      finalTenantEmail,        // p_tenantemail       ← technicalNotificationMails[0]
+      finalDynamicsAccountId,  // p_dynamicsaccountid
+      adminGroupId,            // p_admingroupid      ← resolved in Flow 2
+      usersGroupId,            // p_usergroupid       ← resolved in Flow 2
+      current.isactive  ?? true,   // p_isactive
+      true,                    // p_isconsented       ← always true at this point
+      current.isapproved ?? false, // p_isapproved
+    ],
+  );
 
-  console.log(`[FLOW 6] ✅ Persisted — adminGroupId: ${adminGroupId}, usersGroupId: ${usersGroupId}`);
+  console.log(`[FLOW 6] ✅ tenant_update complete — tenantName=${finalTenantName} | email=${finalTenantEmail} | adminGroupId=${adminGroupId} | usersGroupId=${usersGroupId}`);
 };
 
 // ─── Full Provisioning Orchestrator ──────────────────────────────────────────
-// Runs Flows 1–6 synchronously (each awaited) so the caller can await the
-// entire chain before sending the HTTP response to the frontend.
-// The frontend only sees "consent=success" once Flow 6 has written to the DB.
+// Awaited by consent_Callback — the HTTP response is held until this resolves.
+// tenantName, tenantEmail, dynamicsAccountId from Step 2 are threaded through
+// so Flow 6 can write them to the DB in the same tenant_update call.
 
-const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
+const runPostConsentFlow = async ({
+  token,
+  tenant,
+  adminOid,
+  tenantUuid,
+  current,
+  tenantName,
+  tenantEmail,
+  dynamicsAccountId,
+}) => {
   console.log("[POST-CONSENT] ── Starting provisioning flow ────────────");
   const headers = makeHeaders(token);
 
@@ -499,10 +552,19 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
   await flow4_batchAssignUsersToGroup(headers, usersGroupId);
   await flow5_assignGroupsToAppRoles(headers, adminGroupId, usersGroupId, enterpriseSp.id);
 
-  if (tenantUuid) {
-    await flow6_persistGroupIdsToDb(tenantUuid, adminGroupId, usersGroupId);
+  if (tenantUuid && current) {
+    await flow6_persistTenantUpdate(
+      tenantUuid,
+      tenant,
+      current,
+      tenantName,
+      tenantEmail,
+      dynamicsAccountId,
+      adminGroupId,
+      usersGroupId,
+    );
   } else {
-    console.warn("[POST-CONSENT] ⚠️ Skipping Flow 6 — tenantUuid is null");
+    console.warn("[POST-CONSENT] ⚠️ Skipping Flow 6 — tenantUuid or current row is null");
   }
 
   console.log("[POST-CONSENT] ✅ Full provisioning flow completed successfully");
@@ -510,11 +572,11 @@ const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
 
 // ─── Consent Callback (Main Entry Point) ─────────────────────────────────────
 // Sequence:
-//   Step 1 — Acquire app-only token (client_credentials, valid post-consent)
-//   Step 2 — Fetch real org info (Graph) + Dynamics accountid IN PARALLEL
+//   Step 1 — Acquire app-only token
+//   Step 2 — Fetch Graph org info (displayName, technicalNotificationMails) + Dynamics
 //   Step 3 — Auto-grant Graph app permissions (non-fatal)
-//   Step 4 — Flip isconsented=true; resolve tenantuuid
-//   Flows 1–6 — Full provisioning (awaited — frontend blocked until DB write done)
+//   Step 4 — Flip isconsented=true; resolve tenantuuid + current DB row
+//   Flows 1–6 — Full provisioning, awaited (frontend blocked until Flow 6 DB write)
 //   → Respond with consent=success ONLY after Flow 6 completes
 
 const consent_Callback = async (req, res) => {
@@ -540,11 +602,12 @@ const consent_Callback = async (req, res) => {
   }
 
   try {
-    // Step 1 — Acquire app-only token
+    // Step 1 — Acquire app-only token for the consenting tenant
     const token = await step1_acquireToken(tenant);
 
-    // Step 2 — Graph org info + Dynamics (both non-fatal)
-    await step2_fetchOrgAndDynamics(token, tenant);
+    // Step 2 — Graph org info (displayName + technicalNotificationMails) + Dynamics
+    const { tenantName, tenantDomain, tenantEmail, dynamicsAccountId } =
+      await step2_fetchOrgAndDynamics(token, tenant);
 
     // Step 3 — Auto-grant Graph app permissions (non-fatal)
     try {
@@ -553,15 +616,24 @@ const consent_Callback = async (req, res) => {
       console.warn("[CONSENT] Step 3 ⚠️ Could not auto-grant Graph permissions:", grantErr.message);
     }
 
-    // Step 4 — Flip isconsented=true; resolve tenantuuid for Flow 6
-    const tenantUuid = await step4_markTenantConsented(tenant);
+    // Step 4 — Flip isconsented=true; resolve tenantuuid and full current DB row
+    const { tenantUuid, current } = await step4_markTenantConsented(tenant);
 
-    // Flows 1–6 — Await the full provisioning chain before responding.
+    // Flows 1–6 — Await the full provisioning chain.
     // The frontend loading screen stays active until this resolves.
     console.log("[CONSENT] ⏳ Running full provisioning flow before responding...");
-    await runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
+    await runPostConsentFlow({
+      token,
+      tenant,
+      adminOid,
+      tenantUuid,
+      current,
+      tenantName,       // Graph displayName
+      tenantEmail,      // technicalNotificationMails[0]
+      dynamicsAccountId,
+    });
 
-    // Only reached after Flow 6 has written group IDs to the DB
+    // Only reached after Flow 6 has written all fields to the DB
     console.log("[CONSENT] ✅ Provisioning complete — responding with consent=success");
     return res.json({ redirectUrl: "/consent-callback?consent=success" });
 
