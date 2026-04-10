@@ -22,7 +22,7 @@ const get_AppRoleAssignments = async (req, res) => {
     }
 
     const principalType = resolvePrincipalType(rawType);
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
     const headers = { Authorization: `Bearer ${token}` };
 
     let assignments = [];
@@ -81,7 +81,7 @@ const create_AppRoleAssignment = async (req, res) => {
     }
 
     const principalType = resolvePrincipalType(rawType);
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
     const headers = {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
@@ -136,7 +136,7 @@ const delete_AppRoleAssignment = async (req, res) => {
     }
 
     const principalType = resolvePrincipalType(rawType);
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
     const headers = { Authorization: `Bearer ${token}` };
 
     const url = `${GRAPH_URL}/${principalType}/${principalId}/appRoleAssignments/${assignmentId}`;
@@ -179,7 +179,7 @@ const get_AppRoleAssignment = async (req, res) => {
       return res.status(400).json({ error: 'principalId is required' });
     }
 
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
 
     // Step 1: Resolve Service Principal ID from Client ID
     const spResponse = await axios.get(

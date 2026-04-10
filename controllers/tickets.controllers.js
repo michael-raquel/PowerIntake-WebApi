@@ -112,7 +112,7 @@ const get_ManagerTeamTickets = async (req, res) => {
 
     const directReportsResponse = await axios.get(
       `${GRAPH_URL}/users/${managerid}/directReports`,
-      { headers: { Authorization: `Bearer ${await getAccessToken()}` } }
+      { headers: { Authorization: `Bearer ${await getAccessToken(req.tenantId)}` } }
     );
 
     const directReports = directReportsResponse.data.value;
