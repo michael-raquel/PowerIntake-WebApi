@@ -1240,7 +1240,7 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
         console.log(`Cron mode: MANUAL (Created from 2026-01-01)`);
 
         let allTickets = [];
-        let nextLink = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}&$top=1000`;
+        let nextLink = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}`;
 
         while (nextLink) {
             const response = await axios.get(nextLink, {
@@ -1252,8 +1252,13 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
                     Prefer: "odata.include-annotations=OData.Community.Display.V1.FormattedValue,odata.maxpagesize=1000",
                 },
             });
-            allTickets.push(...response.data.value);
+
+            const page = response.data.value;
+            allTickets.push(...page);
+
             nextLink = response.data["@odata.nextLink"] ?? null;
+
+            console.log(`Fetched page: ${page.length} tickets | Total so far: ${allTickets.length} | Has next: ${!!nextLink}`);
         }
 
         console.log(`Fetched ${allTickets.length} tickets from Dynamics`);
