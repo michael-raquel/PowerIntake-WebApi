@@ -1,8 +1,9 @@
 const axios = require("axios");
 const client = require("../config/db");
 const { getAccessToken } = require("../config/authService");
+const { getDynamicsToken } = require("../utils/dynamicsToken");
 
-const GRAPH_URL = "https://graph.microsoft.com/v1.0";
+const GRAPH_URL    = "https://graph.microsoft.com/v1.0";
 const GRAPH_APP_ID = "00000003-0000-0000-c000-000000000000";
 
 const REQUIRED_GRAPH_ROLES = [
@@ -15,20 +16,82 @@ const REQUIRED_GRAPH_ROLES = [
 const ADMIN_APP_ROLE_ID = "3d316243-5776-4d70-93e0-0762378f97ed"; // PowerIntake.Admin
 const USERS_APP_ROLE_ID = "154626a2-3572-4da2-9b85-050ff2f833d8"; // PowerIntake.Users
 
-// ─── Grant Graph Permissions ──────────────────────────────────────────────────
-const grantGraphPermissions = async (token) => {
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const makeHeaders = (token) => ({
+  Authorization: `Bearer ${token}`,
+  "Content-Type": "application/json",
+});
+
+const withRetry = async (label, fn, { retries = 5, delayMs = 3000 } = {}) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const status = err.response?.status;
+      const isRetryable = status === 404 || status === 429;
+
+      if (!isRetryable || attempt === retries) throw err;
+
+      const wait = delayMs * attempt;
+      console.warn(
+        `[RETRY] ${label} — attempt ${attempt}/${retries} failed (HTTP ${status}), retrying in ${wait}ms...`,
+      );
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+};
+
+// ─── Step 1: Acquire Token ────────────────────────────────────────────────────
+
+const step1_acquireToken = async (tenant) => {
+  console.log(`[STEP 1] Acquiring token for consenting tenant=${tenant}...`);
+  const token = await getAccessToken(tenant);
+  console.log("[STEP 1] ✅ Token acquired");
+  return token;
+};
+
+// ─── Step 2: Fetch Dynamics Account ID ───────────────────────────────────────
+
+const step2_fetchDynamicsAccountId = async (tenant) => {
+  console.log("[STEP 2] Fetching Dynamics accountid...");
+
+  try {
+    const dynamicsToken = await getDynamicsToken();
+    const res = await axios.get(
+      `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts?$filter=ss_azuretenantid eq '${tenant}'&$select=accountid&$top=1`,
+      {
+        headers: {
+          Authorization:      `Bearer ${dynamicsToken}`,
+          Accept:             "application/json",
+          "OData-Version":    "4.0",
+          "OData-MaxVersion": "4.0",
+        },
+        timeout: 10000,
+      },
+    );
+
+    const dynamicsAccountId = res.data.value?.[0]?.accountid ?? null;
+    console.log(`[STEP 2] ✅ Dynamics — dynamicsAccountId=${dynamicsAccountId ?? "not found"}`);
+    return dynamicsAccountId;
+  } catch (err) {
+    console.warn(`[STEP 2] ⚠️ Dynamics lookup failed (non-fatal): ${err.message}`);
+    return null;
+  }
+};
+
+// ─── Step 3: Grant Graph App Permissions ─────────────────────────────────────
+
+const step3_grantGraphPermissions = async (token) => {
+  console.log("[STEP 3] Granting Graph permissions...");
+  const headers = makeHeaders(token);
 
   const ourSpRes = await axios.get(
     `${GRAPH_URL}/servicePrincipals?$filter=appId eq '${process.env.AZURE_CLIENT_ID}'&$select=id,appId,displayName`,
     { headers },
   );
   const ourSp = ourSpRes.data.value?.[0];
-  if (!ourSp)
-    throw new Error("Our service principal not found on client tenant");
+  if (!ourSp) throw new Error("Our service principal not found on client tenant");
 
   const graphSpRes = await axios.get(
     `${GRAPH_URL}/servicePrincipals?$filter=appId eq '${GRAPH_APP_ID}'&$select=id,appRoles`,
@@ -41,61 +104,90 @@ const grantGraphPermissions = async (token) => {
     `${GRAPH_URL}/servicePrincipals/${ourSp.id}/appRoleAssignments`,
     { headers },
   );
-  const existingRoleIds = new Set(
-    existingRes.data.value.map((a) => a.appRoleId),
-  );
+  const existingRoleIds = new Set(existingRes.data.value.map((a) => a.appRoleId));
+  const rolesToGrant    = REQUIRED_GRAPH_ROLES.filter((roleId) => !existingRoleIds.has(roleId));
 
   const results = await Promise.allSettled(
-    REQUIRED_GRAPH_ROLES.filter((roleId) => !existingRoleIds.has(roleId)).map(
-      (appRoleId) =>
-        axios.post(
-          `${GRAPH_URL}/servicePrincipals/${ourSp.id}/appRoleAssignments`,
-          { principalId: ourSp.id, resourceId: graphSp.id, appRoleId },
-          { headers },
-        ),
+    rolesToGrant.map((appRoleId) =>
+      axios.post(
+        `${GRAPH_URL}/servicePrincipals/${ourSp.id}/appRoleAssignments`,
+        { principalId: ourSp.id, resourceId: graphSp.id, appRoleId },
+        { headers },
+      ),
     ),
   );
 
   const granted = results.filter((r) => r.status === "fulfilled").length;
   const skipped = existingRoleIds.size;
-  const failed = results.filter((r) => r.status === "rejected");
+  const failed  = results.filter((r) => r.status === "rejected");
 
   failed.forEach((f) =>
     console.warn(
-      "[CONSENT] Permission grant failed:",
+      "[STEP 3] Permission grant failed:",
       f.reason?.response?.data?.error?.message ?? f.reason?.message,
     ),
   );
 
   console.log(
-    `[CONSENT] Graph permissions — granted: ${granted}, already existed: ${skipped}, failed: ${failed.length}`,
+    `[STEP 3] ✅ Graph permissions — granted: ${granted}, already existed: ${skipped}, failed: ${failed.length}`,
   );
 };
 
-// ─── Resolve the enterprise app's Service Principal ID in the consenting tenant
-// This is CRITICAL for multi-tenant: appRoleAssignedTo must target THIS SP id,
-// not the home tenant's. When a tenant consents, Azure creates an enterprise app
-// (service principal) in their tenant with the same appId but a different object id.
-const resolveServicePrincipalInTenant = async (headers) => {
+// ─── Step 4: Mark Tenant as Consented ────────────────────────────────────────
+
+const step4_markTenantConsented = async (tenant) => {
+  console.log(`[STEP 4] Marking tenant as consented — entratenantid=${tenant}...`);
+
+  const result = await client.query(
+    `SELECT updated, message FROM public.tenant_update_isconsented($1, $2)`,
+    [tenant, true],
+  );
+
+  const row = result.rows[0];
+  console.log(`[STEP 4] ✅ DB response — updated=${row?.updated} | message=${row?.message}`);
+
+  const tenantRes = await client.query(
+    `SELECT tenantuuid FROM public.tenant WHERE entratenantid = $1`,
+    [tenant],
+  );
+  const tenantUuid = tenantRes.rows[0]?.tenantuuid ?? null;
+
+  if (!tenantUuid) {
+    console.warn(`[STEP 4] ⚠️ Could not resolve tenantuuid for tenant=${tenant} — group persistence will be skipped`);
+  } else {
+    console.log(`[STEP 4] ✅ Resolved tenantuuid=${tenantUuid}`);
+  }
+
+  return tenantUuid;
+};
+
+// ─── Flow 1: Resolve Enterprise SP in Consenting Tenant ──────────────────────
+
+const flow1_resolveEnterpriseSp = async (headers) => {
+  console.log("[FLOW 1] Resolving enterprise app SP in consenting tenant...");
+
   const spRes = await axios.get(
     `${GRAPH_URL}/servicePrincipals?$filter=appId eq '${process.env.AZURE_CLIENT_ID}'&$select=id,appId,displayName`,
     { headers, timeout: 10000 },
   );
   const sp = spRes.data.value?.[0];
+
   if (!sp) {
     throw new Error(
-      `[POST-CONSENT] Enterprise app service principal not found in consenting tenant for appId=${process.env.AZURE_CLIENT_ID}. ` +
+      `[FLOW 1] Enterprise app SP not found in consenting tenant for appId=${process.env.AZURE_CLIENT_ID}. ` +
         `Ensure the tenant has completed admin consent.`,
     );
   }
-  console.log(
-    `[POST-CONSENT] Resolved enterprise SP in tenant — id=${sp.id}, displayName=${sp.displayName}`,
-  );
+
+  console.log(`[FLOW 1] ✅ Resolved enterprise SP — id=${sp.id}, displayName=${sp.displayName}`);
   return sp;
 };
 
-// ─── Flow 1: Ensure Groups Exist ─────────────────────────────────────────────
-const ensureGroups = async (headers) => {
+// ─── Flow 2: Ensure Groups Exist ─────────────────────────────────────────────
+
+const flow2_ensureGroups = async (headers) => {
+  console.log("[FLOW 2] Ensuring PowerIntake groups exist...");
+
   const findGroup = async (displayName) => {
     const res = await axios.get(
       `${GRAPH_URL}/groups?$filter=displayName eq '${displayName}'&$select=id,displayName`,
@@ -109,172 +201,196 @@ const ensureGroups = async (headers) => {
       `${GRAPH_URL}/groups`,
       {
         displayName,
-        mailNickname: displayName.replace(/\./g, ""),
-        mailEnabled: false,
+        mailNickname:    displayName.replace(/\./g, ""),
+        mailEnabled:     false,
         securityEnabled: true,
-        groupTypes: [],
+        groupTypes:      [],
       },
       { headers, timeout: 10000 },
     );
-    console.log(
-      `[POST-CONSENT] Created group: ${displayName} → ${res.data.id}`,
-    );
+    console.log(`[FLOW 2] Created group: ${displayName} → ${res.data.id}`);
     return res.data;
   };
 
   let adminGroup = await findGroup("PowerIntake.Admin");
   if (adminGroup) {
-    console.log(
-      `[POST-CONSENT] Group already exists: PowerIntake.Admin → ${adminGroup.id}`,
-    );
+    console.log(`[FLOW 2] Group already exists: PowerIntake.Admin → ${adminGroup.id}`);
   } else {
     adminGroup = await createGroup("PowerIntake.Admin");
   }
+  const adminGroupId = adminGroup.id;
 
   let usersGroup = await findGroup("PowerIntake.Users");
   if (usersGroup) {
-    console.log(
-      `[POST-CONSENT] Group already exists: PowerIntake.Users → ${usersGroup.id}`,
-    );
+    console.log(`[FLOW 2] Group already exists: PowerIntake.Users → ${usersGroup.id}`);
   } else {
     usersGroup = await createGroup("PowerIntake.Users");
   }
+  const usersGroupId = usersGroup.id;
 
-  return { adminGroupId: adminGroup.id, usersGroupId: usersGroup.id };
+  console.log(`[FLOW 2] ✅ Groups ensured — adminGroupId=${adminGroupId} | usersGroupId=${usersGroupId}`);
+
+  console.log("[FLOW 2] ⏳ Waiting 5s for directory propagation before proceeding...");
+  await new Promise((r) => setTimeout(r, 5000));
+
+  return { adminGroupId, usersGroupId };
 };
 
-// ─── Flow 2: Assign Global Admin to Both Groups ───────────────────────────────
-const assignAdminToGroups = async (
-  headers,
-  adminOid,
-  adminGroupId,
-  usersGroupId,
-) => {
+// ─── Flow 3: Assign Global Admin to Both Groups ───────────────────────────────
+
+const flow3_assignAdminToGroups = async (headers, adminOid, adminGroupId, usersGroupId) => {
+  console.log(`[FLOW 3] Assigning admin ${adminOid} to both groups...`);
+
   const addToGroup = async (groupId) => {
     try {
-      const checkRes = await axios.get(
-        `${GRAPH_URL}/groups/${groupId}/members?$filter=id eq '${adminOid}'&$select=id`,
-        { headers, timeout: 10000 },
+      await withRetry(`addMember group=${groupId}`, () =>
+        axios.post(
+          `${GRAPH_URL}/groups/${groupId}/members/$ref`,
+          { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
+          { headers, timeout: 10000 },
+        ),
       );
-      if (checkRes.data.value?.length > 0) {
-        console.log(
-          `[POST-CONSENT] Admin ${adminOid} already member of group ${groupId}`,
-        );
-        return;
-      }
-    } catch (e) {
-      console.warn(
-        `[POST-CONSENT] Member check skipped for group ${groupId}, attempting add:`,
-        e.message,
-      );
-    }
-
-    try {
-      await axios.post(
-        `${GRAPH_URL}/groups/${groupId}/members/$ref`,
-        { "@odata.id": `${GRAPH_URL}/directoryObjects/${adminOid}` },
-        { headers, timeout: 10000 },
-      );
-      console.log(`[POST-CONSENT] Added admin ${adminOid} to group ${groupId}`);
+      console.log(`[FLOW 3] ✅ Added admin ${adminOid} to group ${groupId}`);
     } catch (err) {
-      if (
-        err.response?.status === 400 &&
-        err.response?.data?.error?.message
-          ?.toLowerCase()
-          .includes("already exist")
-      ) {
-        console.log(
-          `[POST-CONSENT] Admin already in group ${groupId} (conflict ignored)`,
-        );
+      const status = err.response?.status;
+      const msg    = err.response?.data?.error?.message ?? err.message;
+
+      if (status === 400 && msg?.toLowerCase().includes("already exist")) {
+        console.log(`[FLOW 3] Admin already in group ${groupId} (conflict ignored)`);
       } else {
-        console.warn(
-          `[POST-CONSENT] Failed to add admin to group ${groupId}:`,
-          err.response?.data?.error?.message ?? err.message,
-        );
+        console.warn(`[FLOW 3] ⚠️ Failed to add admin to group ${groupId}: ${msg}`);
       }
     }
   };
 
-  await Promise.allSettled([
-    addToGroup(adminGroupId),
-    addToGroup(usersGroupId),
-  ]);
+  await Promise.allSettled([addToGroup(adminGroupId), addToGroup(usersGroupId)]);
+  console.log("[FLOW 3] ✅ Admin assignment complete");
 };
 
-// ─── Flow 3: Batch Assign All Tenant Users to PowerIntake.Users ───────────────
-const batchAssignUsersToGroup = async (headers, usersGroupId) => {
-  let allUsers = [];
-  let nextLink = `${GRAPH_URL}/users?$select=id&$top=999`;
-  while (nextLink) {
-    const { data } = await axios.get(nextLink, { headers, timeout: 15000 });
-    allUsers.push(...data.value);
-    nextLink = data["@odata.nextLink"] ?? null;
+// ─── Flow 4: Batch Assign Active Tenant Users to PowerIntake.Users ────────────
+
+const flow4_batchAssignUsersToGroup = async (headers, usersGroupId) => {
+  console.log("[FLOW 4] Batch assigning active tenant users to PowerIntake.Users...");
+
+  const fetchActiveUsers = async () => {
+    try {
+      console.log("[FLOW 4] Strategy 1 — Fetching active users (standard query)...");
+      let users    = [];
+      let nextLink = `${GRAPH_URL}/users?$filter=accountEnabled eq true&$select=id&$top=999`;
+      while (nextLink) {
+        const { data } = await axios.get(nextLink, { headers, timeout: 15000 });
+        users.push(...data.value);
+        nextLink = data["@odata.nextLink"] ?? null;
+      }
+      console.log(`[FLOW 4] Strategy 1 ✅ Fetched ${users.length} active users`);
+      return { users, filtered: true };
+    } catch (err) {
+      const errCode = err.response?.data?.error?.code ?? "";
+      const errMsg  = err.response?.data?.error?.message ?? err.message;
+      const isUnsupported =
+        err.response?.status === 400 &&
+        (errCode === "Request_UnsupportedQuery" || errMsg.includes("ConsistencyLevel"));
+
+      if (!isUnsupported) throw err;
+      console.warn(`[FLOW 4] Strategy 1 ⚠️ Unsupported on this tenant (${errCode}), trying Strategy 2...`);
+    }
+
+    try {
+      console.log("[FLOW 4] Strategy 2 — Fetching active users (advanced query mode)...");
+      const advancedHeaders = { ...headers, "ConsistencyLevel": "eventual" };
+      let users    = [];
+      let nextLink = `${GRAPH_URL}/users?$filter=accountEnabled eq true&$select=id&$top=999&$count=true`;
+      while (nextLink) {
+        const { data } = await axios.get(nextLink, { headers: advancedHeaders, timeout: 15000 });
+        users.push(...data.value);
+        nextLink = data["@odata.nextLink"] ?? null;
+      }
+      console.log(`[FLOW 4] Strategy 2 ✅ Fetched ${users.length} active users`);
+      return { users, filtered: true };
+    } catch (err) {
+      console.warn(
+        `[FLOW 4] Strategy 2 ⚠️ Advanced query also failed: ${err.response?.data?.error?.message ?? err.message}`,
+      );
+      console.warn("[FLOW 4] Strategy 3 — Falling back to fetching all users unfiltered...");
+    }
+
+    let users    = [];
+    let nextLink = `${GRAPH_URL}/users?$select=id&$top=999`;
+    while (nextLink) {
+      const { data } = await axios.get(nextLink, { headers, timeout: 15000 });
+      users.push(...data.value);
+      nextLink = data["@odata.nextLink"] ?? null;
+    }
+    console.log(
+      `[FLOW 4] Strategy 3 ✅ Fetched ${users.length} users (unfiltered — includes disabled accounts)`,
+    );
+    return { users, filtered: false };
+  };
+
+  const { users: allUsers, filtered } = await fetchActiveUsers();
+
+  if (!filtered) {
+    console.warn("[FLOW 4] ⚠️ Could not filter by accountEnabled — disabled accounts may be included");
   }
 
   if (allUsers.length === 0) {
-    console.log("[POST-CONSENT] No users found in tenant for group assignment");
+    console.log("[FLOW 4] No users found in tenant for group assignment");
     return;
   }
 
   const existingMemberIds = new Set();
-  let membersLink = `${GRAPH_URL}/groups/${usersGroupId}/members?$select=id&$top=999`;
-  while (membersLink) {
-    const { data } = await axios.get(membersLink, { headers, timeout: 15000 });
-    data.value.forEach((m) => existingMemberIds.add(m.id));
-    membersLink = data["@odata.nextLink"] ?? null;
-  }
+  await withRetry(`fetch existing members for group=${usersGroupId}`, async () => {
+    existingMemberIds.clear();
+    let membersLink = `${GRAPH_URL}/groups/${usersGroupId}/members?$select=id&$top=999`;
+    while (membersLink) {
+      const { data } = await axios.get(membersLink, { headers, timeout: 15000 });
+      data.value.forEach((m) => existingMemberIds.add(m.id));
+      membersLink = data["@odata.nextLink"] ?? null;
+    }
+  });
 
   const usersToAdd = allUsers.filter((u) => !existingMemberIds.has(u.id));
 
   if (usersToAdd.length === 0) {
-    console.log(
-      `[POST-CONSENT] All ${allUsers.length} users already in PowerIntake.Users`,
-    );
+    console.log(`[FLOW 4] All ${allUsers.length} active users already in PowerIntake.Users`);
     return;
   }
 
   console.log(
-    `[POST-CONSENT] Adding ${usersToAdd.length} users to PowerIntake.Users ` +
-      `(${existingMemberIds.size} already members)`,
+    `[FLOW 4] Adding ${usersToAdd.length} active users (${existingMemberIds.size} already members, skipped)...`,
   );
 
   const chunkSize = 20;
   for (let i = 0; i < usersToAdd.length; i += chunkSize) {
-    const chunk = usersToAdd.slice(i, i + chunkSize);
+    const chunk    = usersToAdd.slice(i, i + chunkSize);
+    const rangeEnd = Math.min(i + chunkSize, usersToAdd.length);
+
     try {
-      await axios.patch(
-        `${GRAPH_URL}/groups/${usersGroupId}`,
-        {
-          "members@odata.bind": chunk.map(
-            (u) => `${GRAPH_URL}/directoryObjects/${u.id}`,
-          ),
-        },
-        { headers, timeout: 15000 },
+      await withRetry(`add users chunk ${i + 1}–${rangeEnd}`, () =>
+        axios.patch(
+          `${GRAPH_URL}/groups/${usersGroupId}`,
+          { "members@odata.bind": chunk.map((u) => `${GRAPH_URL}/directoryObjects/${u.id}`) },
+          { headers, timeout: 15000 },
+        ),
       );
-      console.log(
-        `[POST-CONSENT] Users chunk added: ${i + 1}–${Math.min(i + chunkSize, usersToAdd.length)} of ${usersToAdd.length}`,
-      );
+      console.log(`[FLOW 4] Users chunk added: ${i + 1}–${rangeEnd} of ${usersToAdd.length}`);
     } catch (err) {
       console.warn(
-        `[POST-CONSENT] Chunk ${i} failed:`,
+        `[FLOW 4] ⚠️ Chunk ${i + 1}–${rangeEnd} failed after retries:`,
         err.response?.data?.error?.message ?? err.message,
       );
     }
   }
+
+  console.log("[FLOW 4] ✅ Batch user assignment complete");
 };
 
-// ─── Flow 4: Assign Groups to App Roles on the TENANT'S enterprise app SP ─────
-// KEY FIX: We pass in the already-resolved `enterpriseSpId` (the SP object ID
-// in the CONSENTING tenant). Previously this used getAccessToken() which returned
-// the home-tenant SP id — wrong target for cross-tenant role assignments.
-const assignGroupsToAppRoles = async (
-  headers,
-  adminGroupId,
-  usersGroupId,
-  enterpriseSpId, // <-- SP object ID in the CONSENTING tenant
-) => {
+// ─── Flow 5: Assign Groups to App Roles on Tenant's Enterprise SP ─────────────
+
+const flow5_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId, enterpriseSpId) => {
+  console.log(`[FLOW 5] Assigning groups to app roles on enterprise SP ${enterpriseSpId}...`);
+
   const assignGroupRole = async (groupId, appRoleId, label) => {
-    // Check if the group already has this role assigned on the enterprise SP
     const existingRes = await axios.get(
       `${GRAPH_URL}/groups/${groupId}/appRoleAssignments`,
       { headers, timeout: 10000 },
@@ -284,188 +400,110 @@ const assignGroupsToAppRoles = async (
     );
 
     if (alreadyAssigned) {
-      console.log(
-        `[POST-CONSENT] ${label} already assigned to appRole ${appRoleId} on SP ${enterpriseSpId}`,
-      );
+      console.log(`[FLOW 5] ${label} already assigned to appRole ${appRoleId} on SP ${enterpriseSpId}`);
       return;
     }
 
     await axios.post(
       `${GRAPH_URL}/groups/${groupId}/appRoleAssignments`,
-      {
-        principalId: groupId,
-        resourceId: enterpriseSpId, // <-- must be the consenting tenant's SP id
-        appRoleId,
-      },
+      { principalId: groupId, resourceId: enterpriseSpId, appRoleId },
       { headers, timeout: 10000 },
     );
-    console.log(
-      `[POST-CONSENT] Assigned ${label} → appRole ${appRoleId} on SP ${enterpriseSpId}`,
-    );
+    console.log(`[FLOW 5] Assigned ${label} → appRole ${appRoleId} on SP ${enterpriseSpId}`);
   };
 
   await Promise.allSettled([
     assignGroupRole(adminGroupId, ADMIN_APP_ROLE_ID, "PowerIntake.Admin"),
     assignGroupRole(usersGroupId, USERS_APP_ROLE_ID, "PowerIntake.Users"),
   ]);
+
+  console.log("[FLOW 5] ✅ App role assignment complete");
 };
 
-// ─── Flow 5: Persist Group IDs to DB ─────────────────────────────────────────
-const persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId) => {
+// ─── Flow 6: Persist Group IDs to DB ─────────────────────────────────────────
+
+const flow6_persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId) => {
+  console.log(`[FLOW 6] Persisting group IDs to DB for tenantUuid=${tenantUuid}...`);
+  console.log(`[FLOW 6] adminGroupId=${adminGroupId} | usersGroupId=${usersGroupId}`);
+
   await client.query(`SELECT public.tenant_update_groups($1, $2, $3)`, [
     tenantUuid,
     adminGroupId,
     usersGroupId,
   ]);
-  console.log(
-    `[POST-CONSENT] Persisted group IDs to DB — admin: ${adminGroupId}, users: ${usersGroupId}`,
-  );
+
+  console.log(`[FLOW 6] ✅ Persisted — adminGroupId: ${adminGroupId}, usersGroupId: ${usersGroupId}`);
 };
 
-// ─── Master Post-Consent Flow ─────────────────────────────────────────────────
+// ─── Full Provisioning Orchestrator ──────────────────────────────────────────
+
 const runPostConsentFlow = async ({ token, tenant, adminOid, tenantUuid }) => {
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
+  console.log("[POST-CONSENT] ── Starting provisioning flow ────────────");
+  const headers = makeHeaders(token);
 
-  try {
-    // Resolve the enterprise app's SP in the CONSENTING tenant first.
-    // This object ID is what must be used as `resourceId` in all appRoleAssignments.
-    // In multi-tenant apps, each tenant gets its own SP object ID even though
-    // the appId (clientId) is the same everywhere.
-    const enterpriseSp = await resolveServicePrincipalInTenant(headers);
+  const enterpriseSp                   = await flow1_resolveEnterpriseSp(headers);
+  const { adminGroupId, usersGroupId } = await flow2_ensureGroups(headers);
 
-    // Flow 1 — Ensure groups exist in the consenting tenant
-    const { adminGroupId, usersGroupId } = await ensureGroups(headers);
+  await flow3_assignAdminToGroups(headers, adminOid, adminGroupId, usersGroupId);
+  await flow4_batchAssignUsersToGroup(headers, usersGroupId);
+  await flow5_assignGroupsToAppRoles(headers, adminGroupId, usersGroupId, enterpriseSp.id);
 
-    // Flow 2 — Assign Global Admin to both groups
-    await assignAdminToGroups(headers, adminOid, adminGroupId, usersGroupId);
-
-    // Flow 3 — Batch assign all tenant users to PowerIntake.Users
-    await batchAssignUsersToGroup(headers, usersGroupId);
-
-    // Flow 4 — Assign groups to their app roles using the TENANT-LOCAL SP id
-    await assignGroupsToAppRoles(
-      headers,
-      adminGroupId,
-      usersGroupId,
-      enterpriseSp.id, // <-- the fix: consenting tenant's SP object id
-    );
-
-    // Flow 5 — Persist group IDs into DB
-    await persistGroupIdsToDb(tenantUuid, adminGroupId, usersGroupId);
-
-    console.log(
-      "[POST-CONSENT] ✅ Full post-consent flow completed successfully",
-    );
-  } catch (err) {
-    console.error("[POST-CONSENT] ❌ Post-consent flow error:", err.message);
+  if (tenantUuid) {
+    await flow6_persistGroupIdsToDb(tenantUuid, adminGroupId, usersGroupId);
+  } else {
+    console.warn("[POST-CONSENT] ⚠️ Skipping Flow 6 — tenantUuid is null");
   }
+
+  console.log("[POST-CONSENT] ✅ Full provisioning flow completed successfully");
 };
 
-// ─── Consent Callback ─────────────────────────────────────────────────────────
+// ─── Consent Callback (Main Entry Point) ─────────────────────────────────────
+
 const consent_Callback = async (req, res) => {
   const { tenant, admin_consent, error } = req.query;
   const adminOid = req.user?.oid || req.user?.sub;
 
   console.log("[CONSENT] ── Callback received ──────────────────────────────");
-  console.log(
-    `[CONSENT] tenant=${tenant} | admin_consent=${admin_consent} | error=${error ?? "none"}`,
-  );
+  console.log(`[CONSENT] tenant=${tenant} | admin_consent=${admin_consent} | error=${error ?? "none"}`);
   console.log(`[CONSENT] adminOid=${adminOid ?? "MISSING"}`);
 
   if (error || admin_consent !== "True") {
     console.warn("[CONSENT] ❌ Failed or cancelled by Microsoft");
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
-
   if (!tenant) {
     console.error("[CONSENT] ❌ Missing tenant param");
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
-
   if (!adminOid) {
-    console.error(
-      "[CONSENT] ❌ Missing adminOid — validateToken may have failed",
-    );
+    console.error("[CONSENT] ❌ Missing adminOid — validateToken may have failed");
     return res.json({ redirectUrl: "/consent-callback?consent=failed" });
   }
 
   try {
-    // IMPORTANT: getAccessToken(tenant) — pass the consenting tenant ID so the
-    // token is scoped to Seabreeze (or whichever tenant just consented), not SpartaServ.
-    // All downstream Graph calls run in the context of the consenting tenant.
-    console.log(
-      `[CONSENT] Step 1 — Acquiring token for consenting tenant=${tenant}...`,
-    );
-    const token = await getAccessToken(tenant);
-    console.log("[CONSENT] Step 1 ✅ Token acquired");
+    // Step 1 — Acquire app-only token
+    const token = await step1_acquireToken(tenant);
 
-    const headers = { Authorization: `Bearer ${token}` };
+    // Step 2 — Dynamics account ID (non-fatal)
+    await step2_fetchDynamicsAccountId(tenant);
 
-    console.log("[CONSENT] Step 2 — Fetching org info from Graph...");
-    const orgRes = await axios.get(`${GRAPH_URL}/organization`, { headers });
-    const org = orgRes.data.value?.[0];
-    const tenantName = org?.displayName ?? "Unknown";
-    const tenantDomain =
-      org?.verifiedDomains?.find((d) => d.isDefault)?.name ?? null;
-    console.log(
-      `[CONSENT] Step 2 ✅ org=${tenantName} | domain=${tenantDomain}`,
-    );
-
-    console.log("[CONSENT] Step 3 — Granting Graph permissions...");
+    // Step 3 — Auto-grant Graph app permissions (non-fatal)
     try {
-      await grantGraphPermissions(token);
-      console.log("[CONSENT] Step 3 ✅ Graph permissions granted");
+      await step3_grantGraphPermissions(token);
     } catch (grantErr) {
-      console.warn(
-        "[CONSENT] Step 3 ⚠️ Could not auto-grant Graph permissions:",
-        grantErr.message,
-      );
+      console.warn("[CONSENT] Step 3 ⚠️ Could not auto-grant Graph permissions:", grantErr.message);
     }
 
-    console.log("[CONSENT] Step 4 — Updating isconsented in DB...");
-    const consentResult = await client.query(
-      `SELECT * FROM public.tenant_update_isconsented($1, $2)`,
-      [tenant, true],
-    );
-    const updateRow = consentResult.rows[0];
-    console.log(
-      `[CONSENT] Step 4 result: updated=${updateRow?.updated} | message=${updateRow?.message}`,
-    );
+    // Step 4 — Flip isconsented=true; resolve tenantuuid for Flow 6
+    const tenantUuid = await step4_markTenantConsented(tenant);
 
-    if (!updateRow?.updated) {
-      console.error(
-        `[CONSENT] Step 4 ❌ Tenant not found in DB — tenant=${tenant}`,
-      );
-      return res.json({ redirectUrl: "/consent-callback?consent=failed" });
-    }
-    console.log("[CONSENT] Step 4 ✅ DB consent flag updated");
+    // Flows 1–6 — Await the full provisioning chain before responding
+    console.log("[CONSENT] ⏳ Running full provisioning flow before responding...");
+    await runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
 
-    console.log("[CONSENT] Step 5 — Resolving tenantuuid from DB...");
-    const tenantRow = await client.query(
-      `SELECT tenantuuid FROM public.tenant_get_map_with_entratenantid() WHERE entratenantid = $1`,
-      [tenant],
-    );
-    const tenantUuid = tenantRow.rows[0]?.tenantuuid ?? null;
-    console.log(`[CONSENT] Step 5 — tenantuuid=${tenantUuid ?? "NOT FOUND"}`);
+    console.log("[CONSENT] ✅ Provisioning complete — responding with consent=success");
+    return res.json({ redirectUrl: "/consent-callback?consent=success" });
 
-    if (!tenantUuid) {
-      console.error(
-        "[CONSENT] Step 5 ⚠️ tenantuuid missing — group IDs will not be persisted",
-      );
-    } else {
-      console.log("[CONSENT] Step 5 ✅ tenantuuid resolved");
-    }
-
-    console.log(
-      "[CONSENT] ✅ Responding with consent=success — firing background provisioning",
-    );
-    res.json({ redirectUrl: "/consent-callback?consent=success" });
-
-    // Fire-and-forget background provisioning using the consenting tenant's token
-    runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
   } catch (err) {
     console.error("[CONSENT] ❌ Unhandled exception:", err.message);
     console.error(err.stack);

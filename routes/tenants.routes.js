@@ -6,6 +6,7 @@ const {
   get_Tenants,
   check_ConsentStatus,
   get_TenantInfo,
+  get_GraphOrgInfo,
 } = require("../controllers/tenant.controllers");
 const validateToken = require("../middlewares/validateToken");
 
@@ -14,5 +15,6 @@ router.post("/", validateToken, create_Tenant);
 router.put("/", update_Tenant);
 router.get("/consent/status", validateToken, check_ConsentStatus);
 router.get("/tenant/info", validateToken, get_TenantInfo);
+router.get("/tenant/org", validateToken, get_GraphOrgInfo);
 
 module.exports = router;

@@ -88,6 +88,9 @@ app.use("/attachments", attachments);
 const notes = require("./routes/notes.routes");
 app.use("/notes", notes);
 
+const powersuiteailogs = require("./routes/powersuiteailogs.routes");
+app.use("/powersuiteailogs", powersuiteailogs);
+
 const technician = require("./routes/technician.routes");
 app.use("/technicians", technician);
 

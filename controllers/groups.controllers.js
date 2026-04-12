@@ -20,7 +20,7 @@ const GROUP_FIELDS = [
 
 const get_AllGroups = async (req, res) => {
   try {
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
     let groups = [];
     let url = `${GRAPH_URL}/groups`;
 
@@ -65,7 +65,7 @@ const get_GroupById = async (req, res) => {
   try {
     const { id } = req.query;
     const response = await axios.get(`${GRAPH_URL}/groups/${id}`, {
-      headers: { Authorization: `Bearer ${await getAccessToken()}` },
+      headers: { Authorization: `Bearer ${await getAccessToken(req.tenantId)}` },
       params: { $select: GROUP_FIELDS },
     });
 
@@ -82,7 +82,7 @@ const get_GroupMembers = async (req, res) => {
   try {
     const { id } = req.query;
     const response = await axios.get(`${GRAPH_URL}/groups/${id}/members`, {
-      headers: { Authorization: `Bearer ${await getAccessToken()}` },
+      headers: { Authorization: `Bearer ${await getAccessToken(req.tenantId)}` },
       params: {
         $select: "id,displayName,mail,userPrincipalName,jobTitle",
         $top: 999,
@@ -102,7 +102,7 @@ const get_GroupOwners = async (req, res) => {
   try {
     const { id } = req.query;
     const response = await axios.get(`${GRAPH_URL}/groups/${id}/owners`, {
-      headers: { Authorization: `Bearer ${await getAccessToken()}` },
+      headers: { Authorization: `Bearer ${await getAccessToken(req.tenantId)}` },
       params: { $select: "id,displayName,mail,userPrincipalName" },
     });
 
@@ -118,7 +118,7 @@ const get_GroupOwners = async (req, res) => {
 const get_GroupFullProfile = async (req, res) => {
   try {
     const { id } = req.query;
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
     const headers = { Authorization: `Bearer ${token}` };
 
     const [groupRes, membersRes, ownersRes] = await Promise.allSettled([
@@ -153,7 +153,7 @@ const get_GroupFullProfile = async (req, res) => {
 
 const get_AllGroupsWithMembers = async (req, res) => {
   try {
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
     const headers = { Authorization: `Bearer ${token}` };
 
     let groups = [];
@@ -238,7 +238,7 @@ const assign_UserToGroup = async (req, res) => {
         .json({ error: "userOid and groupId are required" });
     }
 
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
 
     await axios.post(
       `${GRAPH_URL}/groups/${groupId}/members/$ref`,
@@ -284,7 +284,7 @@ const unassign_UserFromGroup = async (req, res) => {
         .json({ error: "userOid and groupId are required" });
     }
 
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
 
     await axios.delete(
       `${GRAPH_URL}/groups/${groupId}/members/${userOid}/$ref`,
@@ -325,7 +325,7 @@ const getAppRolesByAppRegistration = async (req, res) => {
       return res.status(400).json({ error: "appId is required" });
     }
 
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
 
     // Look up the app registration by appId (client ID)
     const appResponse = await axios.get(
@@ -390,7 +390,7 @@ const getUserGroupsByAppRole = async (req, res) => {
         .json({ error: "userOid and clientId are required" });
     }
 
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
 
     // Step 1: Get the service principal by clientId
     const spResponse = await axios.get(
@@ -494,7 +494,7 @@ const getAppRolesWithGroupsByClientId = async (req, res) => {
     let { clientId } = req.params || {};
     clientId = clientId || "6ccf8b01-7af5-497b-9e23-45a92d68a226";
 
-    const token = await getAccessToken();
+    const token = await getAccessToken(req.tenantId);
 
     // Step 1: Get app registration by clientId for app role definitions
     const appResponse = await axios.get(

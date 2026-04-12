@@ -112,7 +112,7 @@ const get_ManagerTeamTickets = async (req, res) => {
 
     const directReportsResponse = await axios.get(
       `${GRAPH_URL}/users/${managerid}/directReports`,
-      { headers: { Authorization: `Bearer ${await getAccessToken()}` } }
+      { headers: { Authorization: `Bearer ${await getAccessToken(req.tenantId)}` } }
     );
 
     const directReports = directReportsResponse.data.value;
@@ -299,6 +299,7 @@ const get_DynamicsTicketById = async (req, res) => {
     }
 };
 
+
 const formatTime = (time) => {
     if (!time) return '';
     const [h, m] = time.split(':').map(Number);
@@ -306,7 +307,7 @@ const formatTime = (time) => {
     const hour   = h % 12 || 12;
     return m === 0 ? `${hour}${period}` : `${hour}:${m.toString().padStart(2, '0')}${period}`;
 };
-
+ 
 const getUTCOffset = (timezone) => {
     try {
         const formatter = new Intl.DateTimeFormat('en', {
@@ -314,171 +315,173 @@ const getUTCOffset = (timezone) => {
             timeZoneName: 'longOffset',
             hour:         'numeric',
         });
-        const parts     = formatter.formatToParts(new Date());
+        const parts      = formatter.formatToParts(new Date());
         const offsetPart = parts.find(p => p.type === 'timeZoneName');
         return offsetPart ? offsetPart.value.replace('GMT', 'UTC') : '';
     } catch (e) {
         return '';
     }
 };
+ 
 
-const stripScheduleFromDescription = (description) => {
-    if (!description) return "";
-    
-    const marker = "\n\nAvailable Date and Time for Support Call:";
-    const index  = description.indexOf(marker);
-    
-    return index !== -1 ? description.slice(0, index) : description;
-};
-
-const buildDescriptionWithSchedule = (description, dates, startTimes, endTimes, timezone) => {
-   
-    const cleanDescription = stripScheduleFromDescription(description);
-
+const buildScheduleNoteText = (dates, startTimes, endTimes, timezone) => {
     const offset  = getUTCOffset(timezone);
     const tzLabel = offset ? `${timezone} (${offset})` : timezone;
-
+ 
     const scheduleLines = dates.map((date, i) => {
         const d       = new Date(date);
         const dateStr = `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
         return `${dateStr} ${formatTime(startTimes[i])} to ${formatTime(endTimes[i])}`;
     });
-
-    const scheduleSuffix = [
-        '',
-        '',
+ 
+    return [
         'Available Date and Time for Support Call:',
         `Time zone: ${tzLabel}`,
         ...scheduleLines,
     ].join('\n');
-
-    return `${cleanDescription}${scheduleSuffix}`;
 };
-
-    const DYNAMICS_STATUSCODE_MAP = {
-        1:         "Working Issue Now",
-        2:         "Waiting",
-        3:         "Work Completed",
-        4:         "Reschedule",
-        5:         "Problem Solved",
-        6:         "Cancelled",
-        1000:      "Information Provided",
-        2000:      "Merged",
-        196780001: "Assigned",
-        196780002: "Technician Rejected",
-        196780003: "Waiting Approval",
-        196780004: "Client Responded",
-        196780005: "Escalate To Onsite",
-        196780006: "Pending Closure",
-        196780007: "Scheduling Required",
-        196780008: "New",
-    };
-
-const create_Ticket = async (req, res) => {
-  try {
-    const {
-      entrauserid,
-      entratenantid,
-      title,
-      description,
-      date,
-      starttime,
-      endtime,
-      usertimezone,
-      officelocation,
-      attachments,
-      createdby,
-      contactid,
-    } = req.body;
-
-    const io = req.app.get("io");
-
-    const toArray = (val) => (Array.isArray(val) ? val : val ? [val] : []);
-    const dates = toArray(date);
-    const startTimes = toArray(starttime);
-    const endTimes = toArray(endtime);
-
-    const fullDescription = buildDescriptionWithSchedule(
-      description,
-      dates,
-      startTimes,
-      endTimes,
-      usertimezone
+ 
+const postScheduleNoteToD = async ({ token, dynamicsIncidentId, dates, startTimes, endTimes, timezone }) => {
+    const noteText = buildScheduleNoteText(dates, startTimes, endTimes, timezone);
+ 
+    await axios.post(
+        `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations`,
+        {
+            subject:  'Available Date and Time for Support Call',
+            notetext: noteText,
+            'objectid_incident@odata.bind': `/incidents(${dynamicsIncidentId})`,
+        },
+        {
+            headers: {
+                Authorization:      `Bearer ${token}`,
+                Accept:             "application/json",
+                "Content-Type":     "application/json",
+                "OData-Version":    "4.0",
+                "OData-MaxVersion": "4.0",
+            },
+        }
     );
-
-    const [result, token, tenantResult, userResult] = await Promise.all([
-      client.query(
-        "SELECT * FROM ticket_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-        [
-          entrauserid,
-          entratenantid,
-          title,
-          fullDescription,
-          dates,
-          startTimes,
-          endTimes,
-          usertimezone,
-          officelocation,
-          toArray(attachments),
-          createdby,
-        ]
-      ),
-      getDynamicsToken(),
-      client.query(
-        "SELECT public.tenant_get_dynamicsaccountid($1) AS dynamicsaccountid",
-        [entratenantid]
-      ),
-      client.query("SELECT * FROM public.user_get_info($1)", [entrauserid]),
-    ]);
-
-    const { ticketuuid, ticketnumber } = result.rows[0];
-    const dynamicsAccountId =
-      tenantResult.rows[0]?.dynamicsaccountid ?? null;
-    const userInfo = userResult.rows[0] ?? {};
-
-    res.status(201).json({
-      ticketuuid,
-      ticketnumber,
-      dynamicsIncidentId: null,
-    });
-
-    syncToDynamics({
-      io,
-     entrauserid, 
-      entratenantid,
-      token,
-      ticketuuid,
-      dynamicsAccountId,
-      userInfo,
-      title,
-      description: fullDescription,
-      usertimezone,
-      date: dates,
-      starttime: startTimes,
-      endtime: endTimes,
-      contactid,
-      attachments: toArray(attachments),
-    }).catch((err) => {
-      console.error("Background Dynamics sync failed:", err.message);
-
-      io.to(entrauserid).emit("ticket:sync_failed", {
-        ticketuuid,
-        error: "Dynamics sync failed",
-      });
-    });
-  } catch (err) {
-    if (err.message) return res.status(400).json({ error: err.message });
-    res.status(500).json({ error: "Internal Server Error" });
-  }
+ 
+    console.log(`[DYNAMICS] Schedule note posted to incident: ${dynamicsIncidentId}`);
 };
-    
+ 
+const DYNAMICS_STATUSCODE_MAP = {
+    1:         "Working Issue Now",
+    2:         "Waiting",
+    3:         "Work Completed",
+    4:         "Reschedule",
+    5:         "Problem Solved",
+    6:         "Cancelled",
+    1000:      "Information Provided",
+    2000:      "Merged",
+    196780001: "Assigned",
+    196780002: "Technician Rejected",
+    196780003: "Waiting Approval",
+    196780004: "Client Responded",
+    196780005: "Escalate To Onsite",
+    196780006: "Pending Closure",
+    196780007: "Scheduling Required",
+    196780008: "New",
+};
+ 
+// ─── Create Ticket ───────────────────────────────────────────────────────────
+ 
+const create_Ticket = async (req, res) => {
+    try {
+        const {
+            entrauserid,
+            entratenantid,
+            title,
+            description,   
+            date,
+            starttime,
+            endtime,
+            usertimezone,
+            officelocation,
+            attachments,
+            createdby,
+            contactid,
+        } = req.body;
+ 
+        const io = req.app.get("io");
+ 
+        const toArray = (val) => (Array.isArray(val) ? val : val ? [val] : []);
+        const dates      = toArray(date);
+        const startTimes = toArray(starttime);
+        const endTimes   = toArray(endtime);
+ 
+        const [result, token, tenantResult, userResult] = await Promise.all([
+            client.query(
+                "SELECT * FROM ticket_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+                [
+                    entrauserid,
+                    entratenantid,
+                    title,
+                    description,        
+                    dates,
+                    startTimes,
+                    endTimes,
+                    usertimezone,
+                    officelocation,
+                    toArray(attachments),
+                    createdby,
+                ]
+            ),
+            getDynamicsToken(),
+            client.query(
+                "SELECT public.tenant_get_dynamicsaccountid($1) AS dynamicsaccountid",
+                [entratenantid]
+            ),
+            client.query("SELECT * FROM public.user_get_info($1)", [entrauserid]),
+        ]);
+ 
+        const { ticketuuid, ticketnumber } = result.rows[0];
+        const dynamicsAccountId = tenantResult.rows[0]?.dynamicsaccountid ?? null;
+        const userInfo          = userResult.rows[0] ?? {};
+ 
+        res.status(201).json({
+            ticketuuid,
+            ticketnumber,
+            dynamicsIncidentId: null,
+        });
+ 
+        syncToDynamics({
+            io,
+            entrauserid,
+            entratenantid,
+            token,
+            ticketuuid,
+            dynamicsAccountId,
+            userInfo,
+            title,
+            description,       
+            usertimezone,
+            date:      dates,
+            starttime: startTimes,
+            endtime:   endTimes,
+            contactid,
+            attachments: toArray(attachments),
+        }).catch((err) => {
+            console.error("Background Dynamics sync failed:", err.message);
+            io.to(entrauserid).emit("ticket:sync_failed", {
+                ticketuuid,
+                error: "Dynamics sync failed",
+            });
+        });
+ 
+    } catch (err) {
+        if (err.message) return res.status(400).json({ error: err.message });
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+};
+ 
 const syncToDynamics = async ({
     io, token, entrauserid, entratenantid, ticketuuid, dynamicsAccountId,
     userInfo, title, description, usertimezone,
     date, starttime, endtime, contactid, attachments
 }) => {
     const toArray = (val) => Array.isArray(val) ? val : val ? [val] : [];
-
+ 
     if (!dynamicsAccountId) {
         try {
             const tenantRes = await client.query(
@@ -486,7 +489,7 @@ const syncToDynamics = async ({
                 [entratenantid]
             );
             const tenant = tenantRes.rows[0];
-
+ 
             if (tenant) {
                 const accountRes = await axios.get(
                     `${process.env.DYNAMICS_URL}/api/data/v9.2/accounts?$filter=emailaddress1 eq '${tenant.tenantemail}'&$select=accountid`,
@@ -499,9 +502,9 @@ const syncToDynamics = async ({
                         }
                     }
                 );
-
+ 
                 dynamicsAccountId = accountRes.data.value?.[0]?.accountid ?? null;
-
+ 
                 if (dynamicsAccountId) {
                     console.log("[DYNAMICS] Tenant account already exists in Dynamics:", dynamicsAccountId);
                     await client.query(
@@ -526,10 +529,10 @@ const syncToDynamics = async ({
                             },
                         }
                     );
-
+ 
                     dynamicsAccountId = createAccountRes.data?.accountid ?? null;
                     console.log("[DYNAMICS] Tenant account created:", dynamicsAccountId);
-
+ 
                     if (dynamicsAccountId) {
                         await client.query(
                             "SELECT public.tenant_update_dynamicsaccountid($1, $2)",
@@ -542,7 +545,7 @@ const syncToDynamics = async ({
             console.error("[DYNAMICS] Failed to resolve/create tenant account:", tenantErr.response?.data || tenantErr.message);
         }
     }
-
+ 
     const dynamicsPayload = {
         "title":             title,
         "description":       description,
@@ -550,20 +553,20 @@ const syncToDynamics = async ({
         "ss_source":         19,
         "ss_timezone":       usertimezone ?? null,
     };
-
+ 
     const dates  = toArray(date);
     const starts = toArray(starttime);
     const ends   = toArray(endtime);
-
+ 
     if (dates.length > 0) {
         dynamicsPayload["ss_schedulestartdate"] = `${dates[0]}T${starts[0]}:00Z`;
         dynamicsPayload["ss_scheduleenddate"]   = `${dates[dates.length - 1]}T${ends[ends.length - 1]}:00Z`;
     }
-
+ 
     if (dynamicsAccountId) {
         dynamicsPayload["customerid_account@odata.bind"] = `/accounts(${dynamicsAccountId})`;
     }
-
+ 
     try {
         const ownerRes = await axios.get(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/systemusers?$filter=internalemailaddress eq 'Joseph@SpartaServ.com'&$select=systemuserid`,
@@ -586,7 +589,7 @@ const syncToDynamics = async ({
     } catch (ownerErr) {
         console.error("[DYNAMICS] Failed to resolve owner:", ownerErr.response?.data || ownerErr.message);
     }
-
+ 
     if (contactid) {
         dynamicsPayload["ss_Contact@odata.bind"] = `/contacts(${contactid})`;
     } else if (userInfo?.useremail) {
@@ -602,16 +605,16 @@ const syncToDynamics = async ({
                     }
                 }
             );
-
+ 
             let dynamicsContactId = contactRes.data.value?.[0]?.contactid ?? null;
-
+ 
             if (!dynamicsContactId) {
                 console.warn(`[DYNAMICS] No contact found for ${userInfo.useremail} — creating...`);
-
+ 
                 const nameParts = (userInfo.username ?? "").trim().split(/\s+/);
                 const firstname = nameParts.length > 1 ? nameParts[0] : null;
                 const lastname  = nameParts.length > 1 ? nameParts.slice(1).join(" ") : nameParts[0] ?? userInfo.useremail;
-
+ 
                 const createContactRes = await axios.post(
                     `${process.env.DYNAMICS_URL}/api/data/v9.2/contacts`,
                     {
@@ -637,20 +640,20 @@ const syncToDynamics = async ({
                         }
                     }
                 );
-
+ 
                 dynamicsContactId = createContactRes.data?.contactid ?? null;
                 console.log("[DYNAMICS] Contact created:", dynamicsContactId);
             }
-
+ 
             if (dynamicsContactId) {
                 dynamicsPayload["ss_Contact@odata.bind"] = `/contacts(${dynamicsContactId})`;
             }
-
+ 
         } catch (contactErr) {
             console.error("[DYNAMICS] Failed to resolve/create contact:", contactErr.response?.data || contactErr.message);
         }
     }
-
+ 
     const dynamicsRes = await axios.post(
         `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents`,
         dynamicsPayload,
@@ -665,7 +668,7 @@ const syncToDynamics = async ({
             }
         }
     );
-
+ 
     const dynamicsIncidentId   = dynamicsRes.data?.incidentid  ?? null;
     const dynamicsTicketNumber = dynamicsRes.data?.ticketnumber ?? null;
     const dynamicsStatus       = dynamicsRes.data?.["ss_autotaskticketstatus@OData.Community.Display.V1.FormattedValue"] ?? null;
@@ -675,20 +678,33 @@ const syncToDynamics = async ({
     const duedate              = dynamicsRes.data?.["ss_duedate@OData.Community.Display.V1.FormattedValue"]             ?? null;
     const priority             = dynamicsRes.data?.["prioritycode@OData.Community.Display.V1.FormattedValue"]           ?? null;
     const ticketlifecycle      = dynamicsRes.data?.["ss_ticketstage@OData.Community.Display.V1.FormattedValue"]         ?? null;
-
+ 
     console.log("[DYNAMICS] Incident created:", { dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus });
-
+ 
     if (dynamicsIncidentId) {
         await client.query(
             "SELECT public.ticket_update_dynamics($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             [ticketuuid, dynamicsIncidentId, dynamicsTicketNumber, dynamicsStatus, ticketStatus, sourceLabel, category, duedate, priority, ticketlifecycle]
         );
-
+ 
+        if (dates.length > 0) {
+            postScheduleNoteToD({
+                token,
+                dynamicsIncidentId,
+                dates,
+                startTimes: starts,
+                endTimes:   ends,
+                timezone:   usertimezone,
+            }).catch(err => {
+                console.error("[DYNAMICS] Failed to post schedule note:", err.response?.data ?? err.message);
+            });
+        }
+ 
         const updated = await client.query(
             "SELECT * FROM public.ticket_get($1, NULL, NULL)",
             [ticketuuid]
         );
-
+ 
         if (io && entrauserid && updated.rows[0]) {
             io.to(entrauserid).emit("ticket:synced", {
                 ticketuuid,
@@ -696,7 +712,7 @@ const syncToDynamics = async ({
             });
             console.log("[WS] Emitted ticket:synced to:", entrauserid);
         }
-
+ 
         const attachmentList = toArray(attachments);
         if (attachmentList.length > 0) {
             const annotationIds = await Promise.all(
@@ -707,16 +723,16 @@ const syncToDynamics = async ({
                 console.error("[DYNAMICS] Attachment sync failed:", err.message);
                 return [];
             });
-
+ 
             for (let i = 0; i < attachmentList.length; i++) {
                 const annotationid = annotationIds[i];
                 const blobUrl      = attachmentList[i];
-
+ 
                 if (!annotationid) {
                     console.warn(`[DYNAMICS] No annotationid for index ${i}, skipping`);
                     continue;
                 }
-
+ 
                 try {
                     await client.query(
                         `SELECT public.attachment_update_annotation($1, $2)`,
@@ -729,6 +745,46 @@ const syncToDynamics = async ({
         }
     }
 };
+ 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const SCHEDULE_NOTE_SUBJECT = 'Available Date and Time for Support Call';
+
+const deleteExistingScheduleNotes = async ({ token, dynamicsIncidentId }) => {
+    const res = await axios.get(
+        `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations?$filter=_objectid_value eq ${dynamicsIncidentId} and subject eq '${SCHEDULE_NOTE_SUBJECT}'&$select=annotationid`,
+        {
+            headers: {
+                Authorization:      `Bearer ${token}`,
+                Accept:             'application/json',
+                'OData-Version':    '4.0',
+                'OData-MaxVersion': '4.0',
+            },
+        }
+    );
+
+    const notes = res.data?.value ?? [];
+
+    await Promise.all(
+        notes.map(note =>
+            axios.delete(
+                `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${note.annotationid})`,
+                {
+                    headers: {
+                        Authorization:      `Bearer ${token}`,
+                        'OData-Version':    '4.0',
+                        'OData-MaxVersion': '4.0',
+                    },
+                }
+            )
+        )
+    );
+
+    if (notes.length > 0) {
+        console.log(`[DYNAMICS] Deleted ${notes.length} old schedule note(s) from incident: ${dynamicsIncidentId}`);
+    }
+};
+
 const syncUpdateToDynamics = async ({
     token, dynamicsIncidentId,
     title, description, usertimezone,
@@ -740,26 +796,21 @@ const syncUpdateToDynamics = async ({
     const starts = toArray(starttime);
     const ends   = toArray(endtime);
 
-    const fullDescription = buildDescriptionWithSchedule(
-        description,
-        dates,
-        starts,
-        ends,
-        usertimezone
-    );
-
     const dynamicsPayload = {
         title,
-        description:   fullDescription,
-        ss_timezone:   usertimezone ?? null,
-        // ss_officelocation: officelocation ?? null,
+        description:  description,
+        ss_timezone:  usertimezone ?? null,
     };
 
-    const toTimeShort = (t) => t ? t.slice(0, 5) : "00:00";
+    const toTimeShort = (t) => t ? t.slice(0, 5) : '00:00';
 
     if (dates.length > 0) {
-        dynamicsPayload["ss_schedulestartdate"] = `${dates[0]}T${toTimeShort(starts[0])}:00Z`;
-        dynamicsPayload["ss_scheduleenddate"]   = `${dates[dates.length - 1]}T${toTimeShort(ends[ends.length - 1])}:00Z`;
+        dynamicsPayload['ss_schedulestartdate'] = `${dates[0]}T${toTimeShort(starts[0])}:00Z`;
+        dynamicsPayload['ss_scheduleenddate']   = `${dates[dates.length - 1]}T${toTimeShort(ends[ends.length - 1])}:00Z`;
+    } else {
+
+        dynamicsPayload['ss_schedulestartdate'] = null;
+        dynamicsPayload['ss_scheduleenddate']   = null;
     }
 
     await axios.patch(
@@ -768,15 +819,28 @@ const syncUpdateToDynamics = async ({
         {
             headers: {
                 Authorization:      `Bearer ${token}`,
-                Accept:             "application/json",
-                "Content-Type":     "application/json",
-                "OData-Version":    "4.0",
-                "OData-MaxVersion": "4.0",
-            }
+                Accept:             'application/json',
+                'Content-Type':     'application/json',
+                'OData-Version':    '4.0',
+                'OData-MaxVersion': '4.0',
+            },
         }
     );
 
     console.log(`[DYNAMICS] Incident updated: ${dynamicsIncidentId}`);
+
+    await deleteExistingScheduleNotes({ token, dynamicsIncidentId });
+
+    if (dates.length > 0) {
+        await postScheduleNoteToD({
+            token,
+            dynamicsIncidentId,
+            dates,
+            startTimes: starts,
+            endTimes:   ends,
+            timezone:   usertimezone,
+        });
+    }
 };
 
 const update_Ticket = async (req, res) => {
@@ -1176,7 +1240,7 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
         console.log(`Cron mode: MANUAL (Created from 2026-01-01)`);
 
         let allTickets = [];
-        let nextLink = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}&$top=1000`;
+        let nextLink = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents?$select=${INCIDENT_SELECT_FIELDS}&$expand=${INCIDENT_EXPAND_FIELDS}&$filter=${encodeURIComponent(filter)}`;
 
         while (nextLink) {
             const response = await axios.get(nextLink, {
@@ -1188,8 +1252,13 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
                     Prefer: "odata.include-annotations=OData.Community.Display.V1.FormattedValue,odata.maxpagesize=1000",
                 },
             });
-            allTickets.push(...response.data.value);
+
+            const page = response.data.value;
+            allTickets.push(...page);
+
             nextLink = response.data["@odata.nextLink"] ?? null;
+
+            console.log(`Fetched page: ${page.length} tickets | Total so far: ${allTickets.length} | Has next: ${!!nextLink}`);
         }
 
         console.log(`Fetched ${allTickets.length} tickets from Dynamics`);
