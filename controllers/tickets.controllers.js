@@ -1263,6 +1263,17 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
 
         console.log(`Fetched ${allTickets.length} tickets from Dynamics`);
         const filtered = allTickets.filter(t => ALLOWED_SOURCES.includes(t.ss_source));
+
+        const excludedSources = allTickets
+            .filter(t => !ALLOWED_SOURCES.includes(t.ss_source))
+            .reduce((acc, t) => {
+                const src = t.ss_source ?? 'null/undefined';
+                acc[src] = (acc[src] || 0) + 1;
+                return acc;
+            }, {});
+
+        console.log(`Excluded ${allTickets.length - filtered.length} tickets by source:`, excludedSources);
+
         console.log(`Filtered to ${filtered.length} tickets`);
 
         if (filtered.length === 0) {
