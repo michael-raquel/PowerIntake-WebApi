@@ -420,6 +420,72 @@ const flow5_assignGroupsToAppRoles = async (headers, adminGroupId, usersGroupId,
   console.log("[FLOW 5] ✅ App role assignment complete");
 };
 
+// ─── Step 5: Enrich Tenant from Graph Org Info ────────────────────────────────
+// Called after full provisioning — SP is guaranteed to exist at this point.
+// Fetches displayName + technical email from Graph and persists to DB.
+
+const step5_enrichTenantFromGraph = async (token, tenant) => {
+  console.log("[STEP 5] Enriching tenant record from Graph org info...");
+
+  try {
+    const headers = { Authorization: `Bearer ${token}` };
+
+    const orgRes = await axios.get(`${GRAPH_URL}/organization`, {
+      headers,
+      params: { $select: "displayName,verifiedDomains,technicalNotificationMails" },
+      timeout: 10000,
+    });
+
+    const org = orgRes.data.value?.[0];
+    if (!org) {
+      console.warn("[STEP 5] ⚠️ No org returned from Graph — skipping enrichment");
+      return;
+    }
+
+    const displayName = org.displayName ?? null;
+    const email       = org.technicalNotificationMails?.[0] ?? null;
+
+    console.log(`[STEP 5] Graph org — displayName=${displayName} | email=${email}`);
+
+    // Resolve tenantuuid + current fields needed for tenant_update's required params
+    const tenantRes = await client.query(
+      `SELECT tenantuuid, entratenantid, tenantname, tenantemail,
+              dynamicsaccountid, admingroupid, usergroupid,
+              isactive, isconsented, isapproved
+       FROM public.tenant
+       WHERE entratenantid = $1`,
+      [tenant],
+    );
+
+    const row = tenantRes.rows[0];
+    if (!row) {
+      console.warn(`[STEP 5] ⚠️ Tenant row not found for entratenantid=${tenant} — skipping`);
+      return;
+    }
+
+    await client.query(
+      `SELECT public.tenant_update($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        row.tenantuuid,
+        row.entratenantid,
+        displayName ?? row.tenantname,   // update name if Graph has a better one
+        email       ?? row.tenantemail,  // update email if Graph has one
+        row.dynamicsaccountid ?? null,
+        row.admingroupid      ?? null,
+        row.usergroupid       ?? null,
+        row.isactive,
+        row.isconsented,
+        row.isapproved,
+      ],
+    );
+
+    console.log("[STEP 5] ✅ Tenant enriched — displayName and email persisted to DB");
+  } catch (err) {
+    // Non-fatal — enrichment failure should never block the consent success response
+    console.warn(`[STEP 5] ⚠️ Graph enrichment failed (non-fatal): ${err.message}`);
+  }
+};
+
 // ─── Flow 6: Persist Group IDs to DB ─────────────────────────────────────────
 
 const flow6_persistGroupIdsToDb = async (tenantUuid, adminGroupId, usersGroupId) => {
@@ -500,6 +566,10 @@ const consent_Callback = async (req, res) => {
     // Flows 1–6 — Await the full provisioning chain before responding
     console.log("[CONSENT] ⏳ Running full provisioning flow before responding...");
     await runPostConsentFlow({ token, tenant, adminOid, tenantUuid });
+
+    // Step 5 — Enrich tenant record with Graph org displayName + email
+    // Safe here: SP is guaranteed to exist after provisioning flows complete
+    await step5_enrichTenantFromGraph(token, tenant);
 
     console.log("[CONSENT] ✅ Provisioning complete — responding with consent=success");
     return res.json({ redirectUrl: "/consent-callback?consent=success" });
