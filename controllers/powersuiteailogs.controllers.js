@@ -17,15 +17,16 @@ const get_PowerSuiteAILogs = async (req, res) => {
 
 const create_PowerSuiteAILogs = async (req, res) => {
 	try {
-		const { entrauserid, title, description, suggestion, createdby } = req.body;
+		const { entrauserid, title, description, suggestion, feedback, createdby } = req.body;
 
 		const result = await client.query(
-			"SELECT powersuiteailogs_create($1, $2, $3, $4, $5) AS powersuiteailogsuuid",
+			"SELECT powersuiteailogs_create($1, $2, $3, $4, $5, $6) AS powersuiteailogsuuid",
 			[
 				entrauserid || null,
 				title || null,
 				description || null,
 				suggestion || null,
+				feedback ?? null,
 				createdby || null,
 			]
 		);

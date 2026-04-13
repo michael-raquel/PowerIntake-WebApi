@@ -49,7 +49,8 @@
  *                 v_title: "Suggested resolution"
  *                 v_description: "The user reported a login error."
  *                 v_suggestion: "Clear browser cache and retry."
- *                 v_rightanswer: "Clear cache resolved the issue."
+*                 v_feedback: "true"
+*                 v_rightanswer: "Clear cache resolved the issue."
  *                 v_createdat: "2026-04-10T09:00:00Z"
  *                 v_createdby: "aabbccdd-1234-5678-abcd-ef1234567890"
  *                 v_modifiedat: null
@@ -74,6 +75,7 @@
  *             entrauserid: "52f63ace-f750-4b3e-aaa2-cb48923602d2"
  *             title: "VPN Connection Issue"
  *             description: "User is unable to connect to VPN after OS update."
+*             feedback: "true"
  *             suggestion: "Try reinstalling the VPN client and updating the network adapter drivers."
  *             createdby: "52f63ace-f750-4b3e-aaa2-cb48923602d2"
  *     responses:

@@ -10,7 +10,7 @@ const validateToken = require("../middlewares/validateToken");
 
 router.get("/", validateToken, get_PowerSuiteAILogs);
 router.post("/", validateToken, create_PowerSuiteAILogs);
-router.patch("/ticket", validateToken, update_PowerSuiteAILogs_TicketId);
+router.patch("/", validateToken, update_PowerSuiteAILogs_TicketId);
 router.delete("/:powersuiteailogsuuid", validateToken, delete_PowerSuiteAILogs);
 
 module.exports = router;
