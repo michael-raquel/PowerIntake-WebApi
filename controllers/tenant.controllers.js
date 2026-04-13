@@ -215,28 +215,12 @@ const check_ConsentStatus = async (req, res) => {
     let row = result.rows[0] ?? null;
     console.log(`[CONSENT STATUS] Step 1 — row found: ${row !== null}`);
 
-    // ── Step 2: Auto-create from JWT claims (pre-consent, Global Admins only) ─
+    // ── Step 2: Auto-create from JWT claims (pre-consent) ───────────────────
     if (!row) {
-      // Guard: only a Global Admin may register a new tenant.
-      // wids (workload identity directory roles) is populated in the JWT by
-      // Entra ID — GLOBAL_ADMIN_WID is the well-known role template ID for
-      // the Global Administrator directory role.
-      const GLOBAL_ADMIN_WID = "62e90394-69f5-4237-9190-012177145e10";
-      const wids = req.user?.wids ?? [];
-      const isGlobalAdmin = wids.includes(GLOBAL_ADMIN_WID);
-
-      console.log(`[CONSENT STATUS] Step 2 — isGlobalAdmin=${isGlobalAdmin} | wids=${JSON.stringify(wids)}`);
-
-      if (!isGlobalAdmin) {
-        console.warn("[CONSENT STATUS] ❌ Non-admin user attempted to register an unknown tenant — blocked");
-        return res.status(403).json({
-          error: "Your organization is not registered. A Global Administrator must sign in first to register your tenant.",
-        });
-      }
-
       console.log("[CONSENT STATUS] Step 2 — Tenant not in DB, creating from JWT claims...");
       console.log("[CONSENT STATUS] Step 2 — Using JWT only (Graph unavailable pre-consent, SP doesn't exist yet)");
 
+      // JWT claims decoded by validateToken middleware — always available
       const tenantName  = req.user?.name ?? null;
       const tenantEmail = req.user?.preferred_username ?? null;
       const createdBy   = req.user?.oid ?? null;
@@ -244,6 +228,7 @@ const check_ConsentStatus = async (req, res) => {
       console.log(`[CONSENT STATUS] Step 2 — name=${tenantName} | email=${tenantEmail} | createdBy=${createdBy}`);
 
       // ── Step 2a: Dynamics lookup — best-effort, non-fatal ─────────────────
+      // Dynamics uses its own token (not the tenant's SP), so it works pre-consent
       let dynamicsAccountId = null;
       try {
         console.log("[CONSENT STATUS] Step 2a — Dynamics lookup...");
@@ -267,6 +252,7 @@ const check_ConsentStatus = async (req, res) => {
       }
 
       // ── Step 2b: Insert minimal tenant record ─────────────────────────────
+      // isconsented defaults to false in DB — consent_Callback sets it to true later
       try {
         console.log("[CONSENT STATUS] Step 2b — Inserting tenant into DB...");
         await client.query(
@@ -295,6 +281,9 @@ const check_ConsentStatus = async (req, res) => {
     }
 
     // ── Step 3: Return consent state ─────────────────────────────────────────
+    // checking.jsx uses this to decide next action:
+    //   consented=false + isGlobalAdmin → redirect to MS adminconsent URL
+    //   consented=true + isactive + isapproved → redirect to /home
     const consented  = row.isconsented === true;
     const isactive   = row.isactive === true;
     const isapproved = row.isapproved === true;
