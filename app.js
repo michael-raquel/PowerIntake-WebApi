@@ -100,6 +100,9 @@ app.use("/ticketstatusswitcher", ticketstatusswitcher);
 const notifications = require("./routes/notifications.routes");
 app.use("/notifications", notifications);
 
+const openai = require("./routes/openai.routes");
+app.use("/openai", openai);
+
 const PORT = process.env.PORT;
 
 server.listen(PORT, () => {
