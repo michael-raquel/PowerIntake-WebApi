@@ -1598,6 +1598,18 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
                     if (entrauserid) {
                         io.to(entrauserid).emit("ticket:updated", payload);
                         console.log(`[WS] Emitted ticket:updated to user: ${entrauserid}`);
+
+                        try {
+                            const notifRes = await client.query(
+                                "SELECT * FROM public.notification_get($1)",
+                                [String(entrauserid)]
+                            );
+                            const notifications = notifRes.rows ?? [];
+                            io.to(entrauserid).emit("notifications:updated", { notifications });
+                            console.log(`[WS] Emitted notifications:updated to user: ${entrauserid}`);
+                        } catch (notifErr) {
+                            console.error("[WEBHOOK] Failed to fetch/emit notifications:", notifErr.message);
+                        }
                     }
 
                     // if (entratenantid) {
