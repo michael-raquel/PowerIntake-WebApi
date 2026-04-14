@@ -1936,19 +1936,19 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 }
             }
 
-            if (io && ticketInfo?.entrauserid && (results.note || results.attachment)) {
-                try {
-                    const notifRes = await client.query(
-                        "SELECT * FROM public.notification_get($1)",
-                        [String(ticketInfo.entrauserid)]
-                    );
-                    const notifications = notifRes.rows ?? [];
-                    io.to(ticketInfo.entrauserid).emit("notifications:updated", { notifications })
-                    console.log(`[WS] Emitted notifications:updated to user: ${ticketInfo.entrauserid}`);
-                } catch (notifErr) {
-                    console.error("[WEBHOOK] Failed to fetch/emit notifications:", notifErr.message);
-                }
-            }
+            // if (io && ticketInfo?.entrauserid && (results.note || results.attachment)) {
+            //     try {
+            //         const notifRes = await client.query(
+            //             "SELECT * FROM public.notification_get($1)",
+            //             [String(ticketInfo.entrauserid)]
+            //         );
+            //         const notifications = notifRes.rows ?? [];
+            //         io.to(ticketInfo.entrauserid).emit("notifications:updated", { notifications })
+            //         console.log(`[WS] Emitted notifications:updated to user: ${ticketInfo.entrauserid}`);
+            //     } catch (notifErr) {
+            //         console.error("[WEBHOOK] Failed to fetch/emit notifications:", notifErr.message);
+            //     }
+            // }
 
 
             return res.status(200).json({
