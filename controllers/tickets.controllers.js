@@ -1753,8 +1753,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             return res.status(400).json({ error: "Missing MessageName in payload" });
         }
 
-        if (messageName === "delete") {
-         
+      if (messageName === "delete") {
             let ticketInfo = null;
             try {
                 const noteInfoRes = await client.query(
@@ -1762,14 +1761,12 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                     [annotationid]
                 );
                 ticketInfo = noteInfoRes.rows[0] ?? null;
+                console.log('[WEBHOOK] ticketInfo for delete:', ticketInfo);
             } catch (lookupErr) {
                 console.warn(`[WEBHOOK] Could not fetch ticket info for annotation ${annotationid}:`, lookupErr.message);
             }
 
-            await client.query(
-                `SELECT public.note_webhook_delete($1)`,
-                [annotationid]
-            );
+            await client.query(`SELECT public.note_webhook_delete($1)`, [annotationid]);
 
             console.log(`[WEBHOOK] Annotation deleted: ${annotationid}`);
 
@@ -1778,7 +1775,10 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                     ticketuuid: String(ticketInfo.ticketuuid),
                     annotationid,
                 });
-                console.log(`[WS] Emitted note:deleted to: ${ticketInfo.entrauserid}`);
+                io.to(ticketInfo.entrauserid).emit("attachment:deleted", {
+                    ticketuuid: String(ticketInfo.ticketuuid),
+                    annotationid,
+                });
 
                 try {
                     const notifRes = await client.query(
@@ -1787,16 +1787,12 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                     );
                     const notifications = notifRes.rows ?? [];
                     io.to(ticketInfo.entrauserid).emit("notifications:updated", { notifications });
-                    console.log(`[WS] Emitted notifications:updated to: ${ticketInfo.entrauserid}`);
                 } catch (notifErr) {
                     console.error("[WEBHOOK] Failed to fetch/emit notifications on delete:", notifErr.message);
                 }
             }
 
-            return res.status(200).json({
-                message: "Annotation deleted successfully",
-                annotationid,
-            });
+            return res.status(200).json({ message: "Annotation deleted successfully", annotationid });
         }
 
         if (messageName === "create" || messageName === "update") {
