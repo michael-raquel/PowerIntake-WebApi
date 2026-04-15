@@ -63,6 +63,7 @@ const syncNoteToDynamics = async ({ token, dynamicsIncidentId, note }) => {
 const create_Note = async (req, res) => {
     try {
         const { ticketuuid, note, createdby } = req.body;
+        const io = req.app.get("io");
 
         const dbResult = await client.query(
             "SELECT note_create($1, $2, $3) AS noteuuid",
@@ -72,6 +73,39 @@ const create_Note = async (req, res) => {
         const noteuuid = dbResult.rows[0].noteuuid;
 
         res.status(201).json({ noteuuid });
+
+        (async () => {
+            try {
+                if (!io) return;
+
+                const ticketResult = await client.query(
+                    "SELECT * FROM public.ticket_get($1, NULL, NULL)",
+                    [ticketuuid]
+                );
+
+                const ticket = ticketResult.rows[0] ?? null;
+                const ownerEntraUserId = ticket?.entrauserid ?? ticket?.v_entrauserid ?? null;
+
+                if (!ownerEntraUserId) return;
+
+                if (
+                    String(ownerEntraUserId).toLowerCase() === String(createdby ?? "").toLowerCase()
+                ) {
+                    return;
+                }
+
+                const notifRes = await client.query(
+                    "SELECT * FROM public.notification_get($1)",
+                    [String(ownerEntraUserId)]
+                );
+                const notifications = notifRes.rows ?? [];
+
+                io.to(String(ownerEntraUserId)).emit("notifications:updated", { notifications });
+                console.log(`[WS] Emitted notifications:updated to user: ${ownerEntraUserId} (note:create)`);
+            } catch (notifErr) {
+                console.error("[NOTE CREATE] Failed to fetch/emit notifications:", notifErr.message);
+            }
+        })();
 
         (async () => {
             try {
