@@ -27,7 +27,9 @@ app.use(
   }),
 );
 
-app.use(express.json());
+app.use("/tickets/dynamics/note", express.json({ limit: "50mb" })); 
+
+app.use(express.json()); 
 setupSwagger(app);
 
 const io = new Server(server, {
