@@ -1598,6 +1598,18 @@ const webhook_DynamicsTicketUpdate = async (req, res) => {
                     if (entrauserid) {
                         io.to(entrauserid).emit("ticket:updated", payload);
                         console.log(`[WS] Emitted ticket:updated to user: ${entrauserid}`);
+
+                        try {
+                            const notifRes = await client.query(
+                                "SELECT * FROM public.notification_get($1)",
+                                [String(entrauserid)]
+                            );
+                            const notifications = notifRes.rows ?? [];
+                            io.to(entrauserid).emit("notifications:updated", { notifications });
+                            console.log(`[WS] Emitted notifications:updated to user: ${entrauserid}`);
+                        } catch (notifErr) {
+                            console.error("[WEBHOOK] Failed to fetch/emit notifications:", notifErr.message);
+                        }
                     }
 
                     // if (entratenantid) {
@@ -1672,6 +1684,18 @@ const webhook_DynamicsTicketDelete = async (req, res) => {
                 if (entrauserid) {
                     io.to(entrauserid).emit("ticket:deleted", payload);
                     console.log(`[WS] Emitted ticket:deleted to user: ${entrauserid}, ticketuuid: ${ticketuuid}`);
+
+                    try {
+                        const notifRes = await client.query(
+                            "SELECT * FROM public.notification_get($1)",
+                            [String(entrauserid)]
+                        );
+                        const notifications = notifRes.rows ?? [];
+                        io.to(entrauserid).emit("notifications:updated", { notifications });
+                        console.log(`[WS] Emitted notifications:updated to user: ${entrauserid}`);
+                    } catch (notifErr) {
+                        console.error("[WEBHOOK] Failed to fetch/emit notifications:", notifErr.message);
+                    }
                 }
 
                 // if (entratenantid) {
@@ -1729,18 +1753,46 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             return res.status(400).json({ error: "Missing MessageName in payload" });
         }
 
-        if (messageName === "delete") {
-            await client.query(
-                `SELECT public.note_webhook_delete($1)`,
-                [annotationid]
-            );
+      if (messageName === "delete") {
+            let ticketInfo = null;
+            try {
+                const noteInfoRes = await client.query(
+                    `SELECT * FROM ticket_get_webhook_info_by_annotationid($1)`,
+                    [annotationid]
+                );
+                ticketInfo = noteInfoRes.rows[0] ?? null;
+                console.log('[WEBHOOK] ticketInfo for delete:', ticketInfo);
+            } catch (lookupErr) {
+                console.warn(`[WEBHOOK] Could not fetch ticket info for annotation ${annotationid}:`, lookupErr.message);
+            }
+
+            await client.query(`SELECT public.note_webhook_delete($1)`, [annotationid]);
 
             console.log(`[WEBHOOK] Annotation deleted: ${annotationid}`);
 
-            return res.status(200).json({
-                message: "Annotation deleted successfully",
-                annotationid,
-            });
+            if (io && ticketInfo?.entrauserid) {
+                io.to(ticketInfo.entrauserid).emit("note:deleted", {
+                    ticketuuid: String(ticketInfo.ticketuuid),
+                    annotationid,
+                });
+                io.to(ticketInfo.entrauserid).emit("attachment:deleted", {
+                    ticketuuid: String(ticketInfo.ticketuuid),
+                    annotationid,
+                });
+
+                try {
+                    const notifRes = await client.query(
+                        "SELECT * FROM public.notification_get($1)",
+                        [String(ticketInfo.entrauserid)]
+                    );
+                    const notifications = notifRes.rows ?? [];
+                    io.to(ticketInfo.entrauserid).emit("notifications:updated", { notifications });
+                } catch (notifErr) {
+                    console.error("[WEBHOOK] Failed to fetch/emit notifications on delete:", notifErr.message);
+                }
+            }
+
+            return res.status(200).json({ message: "Annotation deleted successfully", annotationid });
         }
 
         if (messageName === "create" || messageName === "update") {
@@ -1778,12 +1830,12 @@ const webhook_DynamicsNoteSync = async (req, res) => {
             const ticketid  = ticketRes.rows[0]?.ticketid ?? null;
             const createdby = note.createdby?.internalemailaddress ?? null;
 
-             const ticketInfoResult = await client.query(
+            const ticketInfoResult = await client.query(
                 `SELECT * FROM ticket_get_webhook_info($1::text[])`,
                 [[incidentid]]
             );
 
-                const ticketInfo = ticketInfoResult.rows[0] ?? null;
+            const ticketInfo = ticketInfoResult.rows[0] ?? null;
 
             const results = {
                 annotationid,
@@ -1807,7 +1859,7 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 results.note = true;
                 console.log(`[WEBHOOK] Note synced (${messageName}): ${annotationid}`);
 
-                 if (io && ticketInfo?.entrauserid) {
+                if (io && ticketInfo?.entrauserid) {
                     io.to(ticketInfo.entrauserid).emit("note:synced", {
                         ticketuuid:  String(ticketInfo.ticketuuid),
                         annotationid,
@@ -1817,9 +1869,8 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 }
             }
 
-                if (note.isdocument && note.filename) {
+            if (note.isdocument && note.filename) {
                 try {
-                    
                     const bodyRes = await axios.get(
                         `${process.env.DYNAMICS_URL}/api/data/v9.2/annotations(${annotationid})?$select=documentbody`,
                         {
@@ -1912,6 +1963,19 @@ const webhook_DynamicsNoteSync = async (req, res) => {
                 }
             }
 
+            if (io && ticketInfo?.entrauserid && (results.note || results.attachment)) {
+                try {
+                    const notifRes = await client.query(
+                        "SELECT * FROM public.notification_get($1)",
+                        [String(ticketInfo.entrauserid)]
+                    );
+                    const notifications = notifRes.rows ?? [];
+                    io.to(ticketInfo.entrauserid).emit("notifications:updated", { notifications });
+                    console.log(`[WS] Emitted notifications:updated to user: ${ticketInfo.entrauserid}`);
+                } catch (notifErr) {
+                    console.error("[WEBHOOK] Failed to fetch/emit notifications:", notifErr.message);
+                }
+            }
 
             return res.status(200).json({
                 message: `Annotation ${messageName}d successfully`,
@@ -1934,14 +1998,13 @@ const webhook_DynamicsNoteSync = async (req, res) => {
         });
 
         return res.status(status || 500).json({
-            error:           "Failed to process Dynamics note webhook",
-            details:         err.message,
-            dynamicsStatus:  status || null,
+            error:            "Failed to process Dynamics note webhook",
+            details:          err.message,
+            dynamicsStatus:   status || null,
             dynamicsResponse: data || null,
         });
     }
 };
-
 
 const reactivate_DynamicsTicket = async (req, res) => {
     try {
