@@ -2005,10 +2005,11 @@ const webhook_DynamicsNoteSync = async (req, res) => {
         });
     }
 };
-
 const reactivate_DynamicsTicket = async (req, res) => {
     try {
         const { ticketuuid, createdby } = req.body;
+
+        console.log(`[REACTIVATE] Starting reactivation for ticketuuid: ${ticketuuid}, createdby: ${createdby}`);
 
         if (!ticketuuid) {
             return res.status(400).json({ error: "ticketuuid is required" });
@@ -2020,14 +2021,17 @@ const reactivate_DynamicsTicket = async (req, res) => {
         );
 
         const dynamicsIncidentId = dynamicsResult.rows[0]?.dynamicsincidentid ?? null;
+        console.log(`[REACTIVATE] Resolved dynamicsIncidentId: ${dynamicsIncidentId}`);
 
         if (!dynamicsIncidentId) {
             return res.status(404).json({ error: "No Dynamics incident linked to this ticket" });
         }
 
         const token = await getDynamicsToken();
+        console.log(`[REACTIVATE] Token acquired: ${token ? "YES" : "NO"}`);
 
         // Step 1: Fetch the incident and expand the customer account to check if active
+        console.log(`[REACTIVATE] Fetching incident from Dynamics: ${dynamicsIncidentId}`);
         const incidentResult = await axios.get(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})?$select=statecode,statuscode&$expand=customerid_account($select=statecode,name)`,
             {
@@ -2041,10 +2045,14 @@ const reactivate_DynamicsTicket = async (req, res) => {
         );
 
         const incident       = incidentResult.data;
-        const accountState   = incident.customerid_account?.statecode;  // 0 = Active, 1 = Inactive
+        const accountState   = incident.customerid_account?.statecode;
         const accountName    = incident.customerid_account?.name ?? "Unknown";
 
+        console.log(`[REACTIVATE] Incident fetched — statecode: ${incident.statecode}, statuscode: ${incident.statuscode}`);
+        console.log(`[REACTIVATE] Customer account — name: "${accountName}", statecode: ${accountState}`);
+
         if (accountState === 1) {
+            console.warn(`[REACTIVATE] Blocked — customer account "${accountName}" is inactive`);
             return res.status(409).json({
                 error:  "Cannot reactivate ticket. The linked customer account is inactive in Dynamics.",
                 account: accountName,
@@ -2052,9 +2060,14 @@ const reactivate_DynamicsTicket = async (req, res) => {
         }
 
         // Step 2: Reactivate the incident
-        await axios.patch(
-            `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
-            { statecode: 0, statuscode: 196780001, ss_ticketstage: 6 },
+        const patchPayload = { statecode: 0, statuscode: 196780001, ss_ticketstage: 6 };
+        const patchUrl = `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`;
+        console.log(`[REACTIVATE] Sending PATCH to: ${patchUrl}`);
+        console.log(`[REACTIVATE] PATCH payload:`, JSON.stringify(patchPayload));
+
+        const patchResult = await axios.patch(
+            patchUrl,
+            patchPayload,
             {
                 headers: {
                     Authorization:      `Bearer ${token}`,
@@ -2066,10 +2079,14 @@ const reactivate_DynamicsTicket = async (req, res) => {
             }
         );
 
+        console.log(`[REACTIVATE] PATCH response status: ${patchResult.status}`);
+        console.log(`[REACTIVATE] PATCH response data:`, JSON.stringify(patchResult.data ?? "(empty)"));
+
         await client.query(
             `SELECT note_create_reactivate($1, $2)`,
             [ticketuuid, createdby]
         );
+        console.log(`[REACTIVATE] note_create_reactivate executed for ticketuuid: ${ticketuuid}`);
 
         console.log(`[DYNAMICS] Ticket reactivated: ${dynamicsIncidentId}`);
 
@@ -2081,6 +2098,7 @@ const reactivate_DynamicsTicket = async (req, res) => {
                     [[dynamicsIncidentId]]
                 );
                 const ticketInfo = ticketInfoResult.rows[0] ?? null;
+                console.log(`[REACTIVATE] WebSocket ticketInfo:`, JSON.stringify(ticketInfo));
 
                 if (ticketInfo) {
                     const updatedResult = await client.query(
@@ -2098,17 +2116,27 @@ const reactivate_DynamicsTicket = async (req, res) => {
                     if (ticketInfo.entrauserid) {
                         io.to(ticketInfo.entrauserid).emit("ticket:reactivated", payload);
                         console.log(`[WS] Emitted ticket:reactivated to: ${ticketInfo.entrauserid}`);
+                    } else {
+                        console.warn(`[REACTIVATE] No entrauserid found on ticketInfo — WebSocket event not emitted`);
                     }
+                } else {
+                    console.warn(`[REACTIVATE] ticketInfo was null — WebSocket event not emitted`);
                 }
             } catch (wsErr) {
                 console.error("[REACTIVATE] Socket emit failed:", wsErr.message);
             }
+        } else {
+            console.warn(`[REACTIVATE] No io instance found on app`);
         }
 
         return res.status(200).json({ message: "Ticket reactivated successfully", dynamicsIncidentId });
 
     } catch (err) {
-        console.error("[DYNAMICS] Reactivate error:", err.response?.data ?? err.message);
+        console.error("[DYNAMICS] Reactivate error — full details:");
+        console.error("  Message:", err.message);
+        console.error("  Response status:", err.response?.status);
+        console.error("  Response data:", JSON.stringify(err.response?.data));
+        console.error("  Response headers:", JSON.stringify(err.response?.headers));
         return res.status(500).json({
             error:   "Failed to reactivate ticket in Dynamics",
             details: err.response?.data ?? err.message,
