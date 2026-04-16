@@ -2027,23 +2027,9 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
         const token = await getDynamicsToken();
 
-        await axios.post(
-            `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})/Microsoft.Dynamics.CRM.ReactivateIncident`,
-            {},
-            {
-                headers: {
-                    Authorization:      `Bearer ${token}`,
-                    Accept:             "application/json",
-                    "Content-Type":     "application/json",
-                    "OData-Version":    "4.0",
-                    "OData-MaxVersion": "4.0",
-                }
-            }
-        );
-
         await axios.patch(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
-            { ss_ticketstage: 6 },
+            { statecode: 0, statuscode: 196780001, ss_ticketstage: 6 },
             {
                 headers: {
                     Authorization:      `Bearer ${token}`,
@@ -2097,15 +2083,16 @@ const reactivate_DynamicsTicket = async (req, res) => {
         return res.status(200).json({ message: "Ticket reactivated successfully", dynamicsIncidentId });
 
     } catch (err) {
-        console.error("[DYNAMICS] Reactivate error:");
-        console.error("[DYNAMICS] Status:", err.response?.status);
-        console.error("[DYNAMICS] Response:", JSON.stringify(err.response?.data, null, 2));
+        console.error("[DYNAMICS] Reactivate error:", err.response?.data ?? err.message);
         return res.status(500).json({
             error:   "Failed to reactivate ticket in Dynamics",
             details: err.response?.data ?? err.message,
         });
     }
 };
+
+
+
 
 module.exports = {
     get_Ticket,
