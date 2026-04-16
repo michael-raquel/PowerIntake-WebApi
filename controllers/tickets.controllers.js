@@ -2027,19 +2027,38 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
         const token = await getDynamicsToken();
 
-        await axios.patch(
-            `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
-            { statecode: 0, statuscode: 196780001, ss_ticketstage: 6 },
+        // DEBUG: check the current ticket state in prod
+        const debugRes = await axios.get(
+            `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})?$select=statecode,statuscode,title`,
             {
                 headers: {
-                    Authorization:      `Bearer ${token}`,
-                    Accept:             "application/json",
-                    "Content-Type":     "application/json",
-                    "OData-Version":    "4.0",
-                    "OData-MaxVersion": "4.0",
+                    Authorization: `Bearer ${token}`,
+                    Accept: "application/json",
+                    "OData-Version": "4.0",
                 }
             }
         );
+        console.log("[DEBUG] Current ticket state before reactivation:", JSON.stringify(debugRes.data, null, 2));
+
+        try {
+            await axios.patch(
+                `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
+                { statecode: 0, statuscode: 196780001, ss_ticketstage: 6 },
+                {
+                    headers: {
+                        Authorization:      `Bearer ${token}`,
+                        Accept:             "application/json",
+                        "Content-Type":     "application/json",
+                        "OData-Version":    "4.0",
+                        "OData-MaxVersion": "4.0",
+                    }
+                }
+            );
+        } catch (patchErr) {
+            console.error("[DEBUG] Patch failed:", JSON.stringify(patchErr.response?.data, null, 2));
+            console.error("[DEBUG] Patch status:", patchErr.response?.status);
+            throw patchErr;
+        }
 
         await client.query(
             `SELECT note_create_reactivate($1, $2)`,
@@ -2090,7 +2109,6 @@ const reactivate_DynamicsTicket = async (req, res) => {
         });
     }
 };
-
 
 
 
