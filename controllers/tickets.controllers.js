@@ -2040,7 +2040,8 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
         await axios.patch(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
-            { statecode: 0, statuscode: 196780001, ss_ticketstage: 6, ss_resolveddate: null },
+            { statecode: 0, ss_ticketstage: 2, ss_resolveddate: null },
+            //  statuscode: 196780001, 
             {
                 headers: {
                     Authorization:      `Bearer ${token}`,
