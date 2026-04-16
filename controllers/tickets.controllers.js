@@ -922,6 +922,11 @@ const buildAccountMap = (filtered) => {
         if (!accId || accountMap.has(accId)) continue;
 
         const entraTenantId = t.customerid_account?.ss_azuretenantid ?? null;
+        const statecode     = t.customerid_account?.statecode ?? null;
+        const isActive      = statecode === 0;
+
+        // ADD THIS LOG
+        console.log(`[TENANT] ${t.customerid_account?.name} | statecode: ${statecode} | isActive: ${isActive}`);
 
         accountMap.set(accId, {
             name: t["_customerid_value@OData.Community.Display.V1.FormattedValue"]
@@ -930,6 +935,7 @@ const buildAccountMap = (filtered) => {
             entraTenantId: entraTenantId && !seenEntraIds.has(entraTenantId)
                 ? entraTenantId
                 : null,
+            isActive,
         });
 
         if (entraTenantId) seenEntraIds.add(entraTenantId);
@@ -970,9 +976,10 @@ const db_batchUpsertTenants = async (accountMap) => {
     const names       = accountIds.map(id => accountMap.get(id).name);
     const dynamicsIds = accountIds;
     const entraIds    = accountIds.map(id => accountMap.get(id).entraTenantId ?? null);
+    const isActives   = accountIds.map(id => accountMap.get(id).isActive ?? true);
 
     try {
-        await client.query(`SELECT public.batch_tenant_insert($1, $2, $3)`, [names, dynamicsIds, entraIds]);
+        await client.query(`SELECT public.batch_tenant_insert($1, $2, $3, $4)`, [names, dynamicsIds, entraIds, isActives]);
         console.log(`Batch upserted tenants: ${accountIds.length}`);
     } catch (e) {
         console.error("db_batchUpsertTenants failed:", e.message);
@@ -1263,6 +1270,10 @@ const sync_DynamicsTickets_toDB = async (req, res) => {
 
         console.log(`Fetched ${allTickets.length} tickets from Dynamics`);
         const filtered = allTickets.filter(t => ALLOWED_SOURCES.includes(t.ss_source));
+        // const filtered = allTickets.filter(t => 
+        //         ALLOWED_SOURCES.includes(t.ss_source) &&
+        //         t.customerid_account?.statecode === 0  
+        //     );
 
         const excludedSources = allTickets
             .filter(t => !ALLOWED_SOURCES.includes(t.ss_source))
@@ -2029,7 +2040,8 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
         await axios.patch(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
-            { statecode: 0, statuscode: 196780001, ss_ticketstage: 6, ss_resolveddate: null },
+            { statecode: 0, ss_ticketstage: 2, ss_resolveddate: null },
+            //  statuscode: 196780001, 
             {
                 headers: {
                     Authorization:      `Bearer ${token}`,
