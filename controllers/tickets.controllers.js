@@ -2027,6 +2027,31 @@ const reactivate_DynamicsTicket = async (req, res) => {
 
         const token = await getDynamicsToken();
 
+        // Step 1: Fetch the incident and expand the customer account to check if active
+        const incidentResult = await axios.get(
+            `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})?$select=statecode,statuscode&$expand=customerid_account($select=statecode,name)`,
+            {
+                headers: {
+                    Authorization:      `Bearer ${token}`,
+                    Accept:             "application/json",
+                    "OData-Version":    "4.0",
+                    "OData-MaxVersion": "4.0",
+                }
+            }
+        );
+
+        const incident       = incidentResult.data;
+        const accountState   = incident.customerid_account?.statecode;  // 0 = Active, 1 = Inactive
+        const accountName    = incident.customerid_account?.name ?? "Unknown";
+
+        if (accountState === 1) {
+            return res.status(409).json({
+                error:  "Cannot reactivate ticket. The linked customer account is inactive in Dynamics.",
+                account: accountName,
+            });
+        }
+
+        // Step 2: Reactivate the incident
         await axios.patch(
             `${process.env.DYNAMICS_URL}/api/data/v9.2/incidents(${dynamicsIncidentId})`,
             { statecode: 0, statuscode: 196780001, ss_ticketstage: 6 },
@@ -2090,9 +2115,6 @@ const reactivate_DynamicsTicket = async (req, res) => {
         });
     }
 };
-
-
-
 
 module.exports = {
     get_Ticket,
